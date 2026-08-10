@@ -10,21 +10,27 @@ import androidx.datastore.core.DataStore
 import androidx.palette.graphics.Palette
 import coil3.asDrawable
 import coil3.imageLoader
+import coil3.request.CachePolicy
 import coil3.request.ImageRequest
 import coil3.request.SuccessResult
 import coil3.request.allowHardware
 import coil3.request.bitmapConfig
+import coil3.size.Precision
 import com.github.damontecres.wholphin.data.model.BaseItem
 import com.github.damontecres.wholphin.data.model.DiscoverItem
 import com.github.damontecres.wholphin.preferences.AppPreferences
 import com.github.damontecres.wholphin.preferences.BackdropStyle
+import com.github.damontecres.wholphin.services.hilt.IoCoroutineScope
 import com.github.damontecres.wholphin.util.WholphinDispatchers
 import dagger.hilt.android.qualifiers.ApplicationContext
-import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.jellyfin.sdk.model.api.BaseItemKind
 import org.jellyfin.sdk.model.api.ImageType
@@ -38,13 +44,13 @@ import javax.inject.Singleton
  * This is usually the backdrop of the currently focused media
  */
 @Singleton
-@OptIn(FlowPreview::class)
 class BackdropService
     @Inject
     constructor(
         @param:ApplicationContext private val context: Context,
         private val imageUrlService: ImageUrlService,
         private val preferences: DataStore<AppPreferences>,
+        @param:IoCoroutineScope private val scope: CoroutineScope,
     ) {
         private val extractedColorCache = LruCache<String, ExtractedColors>(50)
 
@@ -52,18 +58,49 @@ class BackdropService
         val backdropFlow = _backdropFlow
 
         /**
+         * The most recently requested backdrop
+         *
+         * Only the latest request is ever processed: moving focus publishes here and the single
+         * collector below cancels whatever load is still in flight. Without this, every focus
+         * change spawned an independent coroutine that downloaded & decoded a backdrop whose
+         * result was then thrown away.
+         */
+        private val requests = MutableStateFlow<BackdropRequest?>(null)
+
+        /**
+         * The width to request backdrops at, since the image is only drawn on part of the screen
+         */
+        private val backdropWidthPx: Int by lazy {
+            (context.resources.displayMetrics.widthPixels * SIZE_FRACTION).toInt()
+        }
+
+        init {
+            scope.launch {
+                // collectLatest cancels the in-flight load whenever a newer request arrives
+                requests.collectLatest { request ->
+                    if (request != null) {
+                        process(request)
+                    }
+                }
+            }
+        }
+
+        /**
          * Update the backdrop to use the specified item
          */
-        suspend fun submit(item: BaseItem) =
-            withContext(WholphinDispatchers.IO) {
-                val imageUrl =
-                    if (item.type == BaseItemKind.GENRE) {
-                        item.imageUrlOverride
-                    } else {
-                        imageUrlService.getItemImageUrl(item, ImageType.BACKDROP)
-                    }
-                submit(item.id.toString(), imageUrl)
-            }
+        suspend fun submit(item: BaseItem) {
+            val imageUrl =
+                if (item.type == BaseItemKind.GENRE) {
+                    item.imageUrlOverride
+                } else {
+                    imageUrlService.getItemImageUrl(
+                        item,
+                        ImageType.BACKDROP,
+                        fillWidth = backdropWidthPx,
+                    )
+                }
+            submit(item.id.toString(), imageUrl)
+        }
 
         /**
          * Update the backdrop to use the specified discovered item
@@ -76,32 +113,31 @@ class BackdropService
         suspend fun submit(
             itemId: String,
             imageUrl: String?,
-        ) = withContext(WholphinDispatchers.IO) {
-            if (backdropFlow.firstOrNull()?.imageUrl != imageUrl) {
-                _backdropFlow.update {
-                    it.copy(
-                        itemId = itemId,
-                        imageUrl = null,
-                    )
-                }
-                extractColors(itemId, imageUrl)
-            }
+        ) {
+            // Conflated, so re-submitting the item that is already showing does nothing
+            requests.value = BackdropRequest(itemId, imageUrl)
         }
 
         /**
          * Remove the backdrop, such as when switching pages
          */
         suspend fun clearBackdrop() {
-            _backdropFlow.update {
-                BackdropResult.NONE
-            }
+            // Also cancels any in-flight load via collectLatest
+            requests.value = null
+            _backdropFlow.value = BackdropResult.NONE
         }
 
-        private suspend fun extractColors(
-            itemId: String,
-            imageUrl: String?,
-        ) {
-            delay(500)
+        private suspend fun process(request: BackdropRequest) {
+            val (itemId, imageUrl) = request
+            // Drop the previous image so a stale backdrop isn't shown alongside the new item
+            _backdropFlow.update {
+                it.copy(
+                    itemId = itemId,
+                    imageUrl = null,
+                )
+            }
+            // Debounce: cancelled if focus moves again before this elapses
+            delay(DEBOUNCE_MS)
             val backdropStyle =
                 preferences.data
                     .firstOrNull()
@@ -148,6 +184,12 @@ class BackdropService
                             .data(imageUrl)
                             .allowHardware(false)
                             .bitmapConfig(Bitmap.Config.ARGB_8888)
+                            // Palette downsamples internally anyway, so decode a thumbnail rather
+                            // than the default Size.ORIGINAL, which allocates megabytes per item
+                            .size(PALETTE_IMAGE_SIZE)
+                            .precision(Precision.INEXACT)
+                            // Keep these throw-away bitmaps from evicting card images
+                            .memoryCachePolicy(CachePolicy.DISABLED)
                             .build()
 
                     val result = loader.execute(request)
@@ -160,6 +202,9 @@ class BackdropService
                     } else {
                         ExtractedColors.DEFAULT
                     }
+                } catch (e: CancellationException) {
+                    // A newer backdrop was requested, don't report default colors for this one
+                    throw e
                 } catch (e: Exception) {
                     Timber.e(e, "Error extracting colors from URL: $imageUrl")
                     ExtractedColors.DEFAULT
@@ -238,6 +283,37 @@ class BackdropService
 
         fun clearColorCache() {
             extractedColorCache.evictAll()
+        }
+
+        /**
+         * A pending backdrop change
+         */
+        private data class BackdropRequest(
+            val itemId: String,
+            val imageUrl: String?,
+        )
+
+        companion object {
+            /**
+             * The fraction of the screen that the backdrop image occupies
+             *
+             * Used both to lay the image out and to request an appropriately sized image
+             *
+             * @see com.github.damontecres.wholphin.ui.nav.Backdrop
+             */
+            const val SIZE_FRACTION = .7f
+
+            /**
+             * How long to wait before loading a backdrop
+             *
+             * Changing the focused item within this window cancels the pending load
+             */
+            private const val DEBOUNCE_MS = 500L
+
+            /**
+             * The size to decode backdrops at when extracting colors
+             */
+            private const val PALETTE_IMAGE_SIZE = 128
         }
     }
 

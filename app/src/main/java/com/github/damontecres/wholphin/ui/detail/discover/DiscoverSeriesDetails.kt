@@ -31,6 +31,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.github.damontecres.wholphin.R
@@ -39,6 +40,7 @@ import com.github.damontecres.wholphin.data.model.BaseItem
 import com.github.damontecres.wholphin.data.model.DiscoverItem
 import com.github.damontecres.wholphin.data.model.DiscoverRating
 import com.github.damontecres.wholphin.data.model.SeerrAvailability
+import com.github.damontecres.wholphin.data.model.SeerrDownload
 import com.github.damontecres.wholphin.data.model.SeerrPermission
 import com.github.damontecres.wholphin.data.model.Trailer
 import com.github.damontecres.wholphin.data.model.hasPermission
@@ -88,6 +90,13 @@ fun DiscoverSeriesDetails(
     val state by viewModel.state.collectAsState()
     val request4kEnabled by viewModel.request4kEnabled.collectAsState(false)
 
+    // Seerr has no push API, so the status is polled. Tying it to the resumed lifecycle keeps it
+    // from running behind playback, the screensaver, or in the background.
+    LifecycleResumeEffect(Unit) {
+        viewModel.startPolling()
+        onPauseOrDispose { viewModel.stopPolling() }
+    }
+
     var overviewDialog by remember { mutableStateOf<ItemDetailsDialogInfo?>(null) }
     var seasonDialog by remember { mutableStateOf<DialogParams?>(null) }
     var moreDialog by remember { mutableStateOf<DialogParams?>(null) }
@@ -117,6 +126,8 @@ fun DiscoverSeriesDetails(
                 people = state.people,
                 similar = state.similar,
                 recommended = state.recommended,
+                downloads = state.downloads,
+                downloads4k = state.downloads4k,
                 modifier = modifier,
                 onClickItem = { index, item ->
                     viewModel.navigateTo(Destination.DiscoveredItem(item))
@@ -234,6 +245,8 @@ fun DiscoverSeriesDetailsContent(
     onLongClickPerson: (Int, DiscoverItem) -> Unit,
     onLongClickSimilar: (Int, DiscoverItem) -> Unit,
     modifier: Modifier = Modifier,
+    downloads: List<SeerrDownload> = emptyList(),
+    downloads4k: List<SeerrDownload> = emptyList(),
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -277,6 +290,11 @@ fun DiscoverSeriesDetailsContent(
                                 Modifier
                                     .fillMaxWidth()
                                     .padding(top = 32.dp, bottom = 16.dp),
+                        )
+                        SeerrStatusBlock(
+                            downloads = downloads,
+                            downloads4k = downloads4k,
+                            modifier = Modifier.padding(bottom = 16.dp),
                         )
                         ExpandableDiscoverButtons(
                             availability =

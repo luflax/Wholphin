@@ -189,7 +189,8 @@ fun BannerCard(
                             .align(Alignment.BottomStart)
                             .background(
                                 MaterialTheme.colorScheme.tertiary,
-                            ).clip(RectangleShape)
+                            )
+                            .clip(RectangleShape)
                             .height(Cards.playedPercentHeight)
                             .fillMaxWidth((playPercent / 100).toFloat()),
                 )

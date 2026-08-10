@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -32,6 +33,7 @@ import androidx.lifecycle.viewModelScope
 import com.github.damontecres.wholphin.R
 import com.github.damontecres.wholphin.api.seerr.infrastructure.ClientException
 import com.github.damontecres.wholphin.data.filter.DiscoverFilter
+import com.github.damontecres.wholphin.data.model.CustomDiscoverSlider
 import com.github.damontecres.wholphin.data.model.DiscoverItem
 import com.github.damontecres.wholphin.data.model.DiscoverRating
 import com.github.damontecres.wholphin.data.model.QuickDetailsData
@@ -53,6 +55,7 @@ import com.github.damontecres.wholphin.ui.util.ResProviderStringProvider
 import com.github.damontecres.wholphin.ui.util.ResStringProvider
 import com.github.damontecres.wholphin.ui.util.ScrollToTopBringIntoViewSpec
 import com.github.damontecres.wholphin.ui.util.StringProvider
+import com.github.damontecres.wholphin.ui.util.StringStringProvider
 import com.github.damontecres.wholphin.util.DataLoadingState
 import com.github.damontecres.wholphin.util.DiscoverRequestType
 import com.github.damontecres.wholphin.util.successValue
@@ -209,6 +212,69 @@ class SeerrDiscoverViewModel
                     )
                 }
             }
+
+            fetchCustomSliders()
+        }
+
+        /**
+         * Load the custom sliders configured on the server, then fetch each one's items
+         *
+         * The rows are seeded in [DataLoadingState.Loading] first so they appear in the admin's
+         * order immediately, rather than popping in as each request finishes.
+         */
+        private fun fetchCustomSliders() {
+            viewModelScope.launchIO {
+                val sliders =
+                    try {
+                        seerrService.customDiscoverSliders()
+                    } catch (ex: Exception) {
+                        Timber.e(ex, "Error getting custom discover sliders")
+                        return@launchIO
+                    }
+                Timber.v("Got %s custom discover sliders", sliders.size)
+                state.update { current ->
+                    current.copy(
+                        customSliders =
+                            sliders.map {
+                                CustomSliderRow(
+                                    slider = it,
+                                    row =
+                                        DiscoverRowData(
+                                            title = StringStringProvider(it.title),
+                                            items = DataLoadingState.Loading,
+                                            // Custom sliders have no "view more" grid yet
+                                            type = DiscoverRequestType.UNKNOWN,
+                                        ),
+                                )
+                            },
+                    )
+                }
+                sliders.forEach { slider ->
+                    viewModelScope.launchIO {
+                        val items =
+                            try {
+                                DataLoadingState.Success(
+                                    seerrService.fetchCustomSlider(slider.query),
+                                )
+                            } catch (ex: Exception) {
+                                Timber.e(ex, "Error fetching custom slider %s", slider.id)
+                                DataLoadingState.Error(ex)
+                            }
+                        state.update { current ->
+                            current.copy(
+                                customSliders =
+                                    current.customSliders.map {
+                                        if (it.slider.id == slider.id) {
+                                            it.copy(row = it.row.copy(items = items))
+                                        } else {
+                                            it
+                                        }
+                                    },
+                            )
+                        }
+                    }
+                }
+            }
         }
 
         private fun fetchAndUpdateState(
@@ -323,6 +389,16 @@ data class DiscoverRowData(
     }
 }
 
+/**
+ * A row driven by a custom discover slider configured on the Seerr server
+ *
+ * These are appended after the fixed rows, in the order the server admin arranged them.
+ */
+data class CustomSliderRow(
+    val slider: CustomDiscoverSlider,
+    val row: DiscoverRowData,
+)
+
 data class DiscoverState(
     val movies: DiscoverRowData = DiscoverRowData.EMPTY,
     val tv: DiscoverRowData = DiscoverRowData.EMPTY,
@@ -331,8 +407,11 @@ data class DiscoverState(
     val upcomingTv: DiscoverRowData = DiscoverRowData.EMPTY,
     val movieGenres: DataLoadingState<List<Genre>> = DataLoadingState.Pending,
     val tvGenres: DataLoadingState<List<Genre>> = DataLoadingState.Pending,
+    val customSliders: List<CustomSliderRow> = emptyList(),
 )
 
+// Offsets of the fixed rows relative to each other. Custom slider rows are rendered above them, so
+// a fixed row's actual position is its offset shifted by the number of custom sliders.
 private const val ROW_TRENDING = 0
 private const val ROW_MOVIES = ROW_TRENDING + 1
 private const val ROW_GENRES_MOVIE = ROW_MOVIES + 1
@@ -355,18 +434,45 @@ fun SeerrDiscoverPage(
     val ratingMap by viewModel.rating.collectAsState()
 
     val focusRequesters = remember { List(LAST_ROW + 1) { FocusRequester() } }
+
+    // Sized separately from the fixed rows so the fixed requesters keep their identity when the
+    // custom sliders finish loading and the row count grows
+    val customFocusRequesters =
+        remember(state.customSliders.size) {
+            List(state.customSliders.size) { FocusRequester() }
+        }
+
+    val customCount = state.customSliders.size
+
+    /** The on-screen position of a fixed row, shifted down past the custom slider rows */
+    fun rowIndex(fixedRow: Int) = customCount + fixedRow
+
+    // Falls back to the first row, which can happen if a saved position points at a custom slider
+    // that the server no longer returns
+    fun focusRequesterFor(row: Int): FocusRequester =
+        if (row < customCount) {
+            customFocusRequesters.getOrNull(row) ?: focusRequesters[ROW_TRENDING]
+        } else {
+            focusRequesters.getOrNull(row - customCount) ?: focusRequesters[ROW_TRENDING]
+        }
+
     var position by rememberPosition(0, -1)
     val focusedItem: DiscoverFocusedItem? =
-        remember(position) {
+        remember(position, state.customSliders) {
             position.let {
+                val fixedRow = position.row - customCount
                 val discoverRow =
-                    when (position.row) {
-                        ROW_TRENDING -> state.trending
-                        ROW_MOVIES -> state.movies
-                        ROW_UPCOMING_MOVIES -> state.upcomingMovies
-                        ROW_TV -> state.tv
-                        ROW_UPCOMING_TV -> state.upcomingTv
-                        else -> null
+                    if (position.row < customCount) {
+                        state.customSliders.getOrNull(position.row)?.row
+                    } else {
+                        when (fixedRow) {
+                            ROW_TRENDING -> state.trending
+                            ROW_MOVIES -> state.movies
+                            ROW_UPCOMING_MOVIES -> state.upcomingMovies
+                            ROW_TV -> state.tv
+                            ROW_UPCOMING_TV -> state.upcomingTv
+                            else -> null
+                        }
                     }
                 if (discoverRow != null) {
                     (discoverRow.items as? DataLoadingState.Success)
@@ -376,7 +482,7 @@ fun SeerrDiscoverPage(
                             DiscoverFocusedItem.Item(it)
                         }
                 } else {
-                    when (position.row) {
+                    when (fixedRow) {
                         ROW_GENRES_MOVIE -> {
                             state.movieGenres.successValue
                                 ?.getOrNull(position.column)
@@ -416,9 +522,10 @@ fun SeerrDiscoverPage(
     var firstFocused by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(state.trending) {
         if (!firstFocused && state.trending.items is DataLoadingState.Success<*>) {
-            firstFocused = focusRequesters.getOrNull(0)?.tryRequestFocus("discover") == true
+            // Row 0 is the first custom slider when there are any, otherwise trending
+            firstFocused = focusRequesterFor(0).tryRequestFocus("discover") == true
         } else if (firstFocused) {
-            focusRequesters.getOrNull(position.row)?.tryRequestFocus()
+            focusRequesterFor(position.row).tryRequestFocus()
         }
     }
 
@@ -487,7 +594,7 @@ fun SeerrDiscoverPage(
                         position = RowColumn(rowIndex, index)
                         positionCallback.invoke(position)
                     },
-                    focusRequester = focusRequesters[rowIndex],
+                    focusRequester = focusRequesterFor(rowIndex),
                     enableViewMore = row.type != DiscoverRequestType.UNKNOWN,
                     onClickViewMore = {
                         (row.items as? DataLoadingState.Success<List<DiscoverItem>>)?.data?.size?.let {
@@ -517,11 +624,19 @@ fun SeerrDiscoverPage(
                         .focusRestorer()
                         .fillMaxSize(),
             ) {
-                item { discoverItemRow(ROW_TRENDING, state.trending) }
+                // Custom sliders configured on the Seerr server, in the admin's order
+                itemsIndexed(
+                    items = state.customSliders,
+                    key = { _, custom -> "custom_slider_${custom.slider.id}" },
+                ) { index, custom ->
+                    discoverItemRow(index, custom.row)
+                }
+
+                item(key = "trending") { discoverItemRow(rowIndex(ROW_TRENDING), state.trending) }
 
                 // Movies
-                item { discoverItemRow(ROW_MOVIES, state.movies) }
-                item {
+                item(key = "movies") { discoverItemRow(rowIndex(ROW_MOVIES), state.movies) }
+                item(key = "movie_genres") {
                     CompositionLocalProvider(LocalBringIntoViewSpec provides defaultBringIntoViewSpec) {
                         DiscoverGenreRow(
                             title =
@@ -533,7 +648,7 @@ fun SeerrDiscoverPage(
                                 },
                             items = state.movieGenres,
                             onClickItem = { index, genre ->
-                                position = RowColumn(ROW_GENRES_MOVIE, index)
+                                position = RowColumn(rowIndex(ROW_GENRES_MOVIE), index)
                                 viewModel.navigationManager.navigateTo(
                                     Destination.DiscoverMoreResult(
                                         type = DiscoverRequestType.DISCOVER_MOVIES,
@@ -551,18 +666,23 @@ fun SeerrDiscoverPage(
                                 )
                             },
                             onCardFocus = { index ->
-                                position = RowColumn(ROW_GENRES_MOVIE, index)
+                                position = RowColumn(rowIndex(ROW_GENRES_MOVIE), index)
                                 positionCallback.invoke(position)
                             },
-                            modifier = Modifier.focusRequester(focusRequesters[ROW_GENRES_MOVIE]),
+                            modifier =
+                                Modifier.focusRequester(
+                                    focusRequesterFor(rowIndex(ROW_GENRES_MOVIE)),
+                                ),
                         )
                     }
                 }
-                item { discoverItemRow(ROW_UPCOMING_MOVIES, state.upcomingMovies) }
+                item(key = "upcoming_movies") {
+                    discoverItemRow(rowIndex(ROW_UPCOMING_MOVIES), state.upcomingMovies)
+                }
 
                 // TV
-                item { discoverItemRow(ROW_TV, state.tv) }
-                item {
+                item(key = "tv") { discoverItemRow(rowIndex(ROW_TV), state.tv) }
+                item(key = "tv_genres") {
                     CompositionLocalProvider(LocalBringIntoViewSpec provides defaultBringIntoViewSpec) {
                         DiscoverGenreRow(
                             title =
@@ -574,7 +694,7 @@ fun SeerrDiscoverPage(
                                 },
                             items = state.tvGenres,
                             onClickItem = { index, genre ->
-                                position = RowColumn(ROW_GENRES_TV, index)
+                                position = RowColumn(rowIndex(ROW_GENRES_TV), index)
                                 viewModel.navigationManager.navigateTo(
                                     Destination.DiscoverMoreResult(
                                         type = DiscoverRequestType.DISCOVER_TV,
@@ -592,14 +712,19 @@ fun SeerrDiscoverPage(
                                 )
                             },
                             onCardFocus = { index ->
-                                position = RowColumn(ROW_GENRES_TV, index)
+                                position = RowColumn(rowIndex(ROW_GENRES_TV), index)
                                 positionCallback.invoke(position)
                             },
-                            modifier = Modifier.focusRequester(focusRequesters[ROW_GENRES_TV]),
+                            modifier =
+                                Modifier.focusRequester(
+                                    focusRequesterFor(rowIndex(ROW_GENRES_TV)),
+                                ),
                         )
                     }
                 }
-                item { discoverItemRow(ROW_UPCOMING_TV, state.upcomingTv) }
+                item(key = "upcoming_tv") {
+                    discoverItemRow(rowIndex(ROW_UPCOMING_TV), state.upcomingTv)
+                }
             }
         }
     }

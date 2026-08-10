@@ -1267,9 +1267,9 @@ components:
         is4k:
           type: boolean
           example: false
-        serverid:
+        serverId:
           type: integer
-        profileid:
+        profileId:
           type: integer
         rootFolder:
           type: string
@@ -1299,11 +1299,30 @@ components:
           type: integer
           example: 0
           description: Availability of the media. 1 = `UNKNOWN`, 2 = `PENDING`, 3 = `PROCESSING`, 4 = `PARTIALLY_AVAILABLE`, 5 = `AVAILABLE`, 6 = `DELETED`
+        status4k:
+          type: integer
+          example: 1
+          description: Availability of the 4K media. Same constants as `status`.
+        mediaType:
+          type: string
+          example: movie
         requests:
           type: array
           readOnly: true
           items:
             $ref: '#/components/schemas/MediaRequest'
+        downloadStatus:
+          type: array
+          readOnly: true
+          description: Radarr/Sonarr queue entries for the standard request
+          items:
+            $ref: '#/components/schemas/DownloadingItem'
+        downloadStatus4k:
+          type: array
+          readOnly: true
+          description: Radarr/Sonarr queue entries for the 4K request
+          items:
+            $ref: '#/components/schemas/DownloadingItem'
         createdAt:
           type: string
           example: '2020-09-12T10:00:27.000Z'
@@ -1316,6 +1335,84 @@ components:
           type: string
         jellyfinMediaId4k:
           type: string
+    DownloadingItem:
+      type: object
+      description: An in-progress download reported by Radarr/Sonarr
+      properties:
+        externalId:
+          type: integer
+          description: The Radarr movie id or Sonarr series id. Not unique per entry.
+          example: 31
+        downloadId:
+          type: string
+          description: Unique and stable per entry, unlike `externalId`
+          example: 8E19C6F725C4851E25E94756EA35814AD46543E5
+        mediaType:
+          type: string
+          example: movie
+        title:
+          type: string
+          description: The release name
+          example: Lucky 2026 S01E03 480p x264-mSD
+        status:
+          type: string
+          description: downloading | queued | paused | warning | failed | completed
+          example: downloading
+        size:
+          type: integer
+          format: int64
+          description: Total size in bytes. Must be int64, real values exceed Int.MAX_VALUE.
+          example: 8431496209
+        sizeLeft:
+          type: integer
+          format: int64
+          description: Bytes remaining. Must be int64.
+          example: 8424975377
+        timeLeft:
+          type: string
+          description: .NET TimeSpan, either "HH:mm:ss" or "d.HH:mm:ss". Absent when queued.
+          example: '60.01:15:25'
+        estimatedCompletionTime:
+          type: string
+          nullable: true
+          example: '2026-08-11T00:57:51.000Z'
+        episode:
+          $ref: '#/components/schemas/DownloadingItemEpisode'
+    DownloadingItemEpisode:
+      type: object
+      description: >-
+        Sonarr's episode shape, attached to TV download entries. Deliberately not the
+        TMDB `Episode` schema, which declares `name` where Sonarr sends `title`.
+      properties:
+        id:
+          type: integer
+        seriesId:
+          type: integer
+        tvdbId:
+          type: integer
+        seasonNumber:
+          type: integer
+        episodeNumber:
+          type: integer
+        absoluteEpisodeNumber:
+          type: integer
+        title:
+          type: string
+          example: Read the Room
+        overview:
+          type: string
+        airDate:
+          type: string
+          nullable: true
+        airDateUtc:
+          type: string
+          nullable: true
+        runtime:
+          type: integer
+        hasFile:
+          type: boolean
+        monitored:
+          type: boolean
     Cast:
       type: object
       properties:
@@ -2093,6 +2190,11 @@ components:
         type:
           type: integer
           example: 1
+        # Not documented upstream, but persisted on the DiscoverSlider entity and
+        # returned by GET /settings/discover. Optional so older servers still parse.
+        order:
+          type: integer
+          example: 0
         title:
           type: string
           nullable: true

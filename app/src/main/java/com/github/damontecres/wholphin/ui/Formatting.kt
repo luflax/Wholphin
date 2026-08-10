@@ -276,3 +276,18 @@ fun Resources.formatDuration(duration: Duration): String =
             else -> getString(R.string.duration_seconds, seconds)
         }
     }
+
+/**
+ * Format a [Duration] that may span days, such as a download estimate from Radarr/Sonarr
+ *
+ * Delegates to [formatDuration] under a day. Above that it collapses to days & hours, since
+ * [formatDuration] alone would render a multi-day estimate as something like "1441h 15m 25s".
+ */
+fun Resources.formatDurationWithDays(duration: Duration): String =
+    duration.toComponents { days, hours, _, _, _ ->
+        if (days > 0) {
+            getString(R.string.duration_days_hours, days.toInt(), hours)
+        } else {
+            formatDuration(duration)
+        }
+    }

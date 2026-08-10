@@ -35,6 +35,7 @@ import coil3.request.ImageRequest
 import coil3.request.transitionFactory
 import com.github.damontecres.wholphin.preferences.BackdropStyle
 import com.github.damontecres.wholphin.services.BackdropResult
+import com.github.damontecres.wholphin.services.BackdropService
 import com.github.damontecres.wholphin.ui.CrossFadeFactory
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
@@ -166,8 +167,8 @@ fun Backdrop(
                 modifier =
                     Modifier
                         .align(Alignment.TopEnd)
-                        .fillMaxHeight(.7f)
-                        .fillMaxWidth(.7f)
+                        .fillMaxHeight(BackdropService.SIZE_FRACTION)
+                        .fillMaxWidth(BackdropService.SIZE_FRACTION)
                         .graphicsLayer(compositingStrategy = CompositingStrategy.Offscreen)
                         .drawWithContent {
                             val start = if (isRtl) size.width else 0f

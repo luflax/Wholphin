@@ -11,9 +11,13 @@ import com.github.damontecres.wholphin.data.ServerRepository
 import com.github.damontecres.wholphin.data.model.DiscoverItem
 import com.github.damontecres.wholphin.data.model.DiscoverRating
 import com.github.damontecres.wholphin.data.model.RemoteTrailer
+import com.github.damontecres.wholphin.data.model.SEERR_MAX_BACKOFF_SHIFT
+import com.github.damontecres.wholphin.data.model.SEERR_MAX_POLL_FAILURES
 import com.github.damontecres.wholphin.data.model.SeerrAvailability
+import com.github.damontecres.wholphin.data.model.SeerrDownload
 import com.github.damontecres.wholphin.data.model.SeerrItemType
 import com.github.damontecres.wholphin.data.model.Trailer
+import com.github.damontecres.wholphin.data.model.seerrPollInterval
 import com.github.damontecres.wholphin.services.BackdropService
 import com.github.damontecres.wholphin.services.NavigationManager
 import com.github.damontecres.wholphin.services.SeerrServerRepository
@@ -35,14 +39,17 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import org.jellyfin.sdk.api.client.ApiClient
 import timber.log.Timber
+import kotlin.time.Duration
 
 @HiltViewModel(assistedFactory = DiscoverSeriesViewModel.Factory::class)
 class DiscoverSeriesViewModel
@@ -65,6 +72,8 @@ class DiscoverSeriesViewModel
         private val _state = MutableStateFlow(DiscoverSeriesState())
         val state: StateFlow<DiscoverSeriesState> = _state
 
+        private var pollJob: Job? = null
+
         val userConfig = seerrServerRepository.current.map { it?.config }
         val request4kEnabled = seerrServerRepository.current.map { it?.request4kTvEnabled ?: false }
 
@@ -76,7 +85,7 @@ class DiscoverSeriesViewModel
             viewModelScope.async(WholphinDispatchers.IO) {
                 try {
                     val tv = seerrService.api.tvApi.tvTvIdGet(tvId = item.id)
-                    _state.update { it.copy(tvSeries = DataLoadingState.Success(tv)) }
+                    setSeries(tv)
                     tv
                 } catch (ex: CancellationException) {
                     throw ex
@@ -86,12 +95,28 @@ class DiscoverSeriesViewModel
                 }
             }
 
+        /**
+         * Store the loaded details and the downloads derived from them
+         *
+         * [TvDetails] is a data class, so re-storing an unchanged payload does not emit and
+         * therefore costs no recomposition. That is what makes polling cheap.
+         */
+        private fun setSeries(tv: TvDetails) {
+            _state.update {
+                it.copy(
+                    tvSeries = DataLoadingState.Success(tv),
+                    downloads = seerrService.downloads(tv.mediaInfo),
+                    downloads4k = seerrService.downloads(tv.mediaInfo, is4k = true),
+                )
+            }
+        }
+
         fun init(): Job =
             viewModelScope.launchIO {
                 Timber.v("Init for tv %s", item.id)
                 try {
                     val tv = seerrService.api.tvApi.tvTvIdGet(tvId = item.id)
-                    _state.update { it.copy(tvSeries = DataLoadingState.Success(tv)) }
+                    setSeries(tv)
                     val discoveredItem = seerrService.createDiscoverItem(tv)
                     backdropService.submit(discoveredItem)
 
@@ -198,6 +223,63 @@ class DiscoverSeriesViewModel
                         ?.requests,
                 )
             _state.update { it.copy(canCancelRequest = canCancel) }
+        }
+
+        /**
+         * Start refreshing the request status while the page is visible
+         *
+         * Seerr has no push API, so this polls. The loop stops on its own once the series reaches a
+         * state that cannot change, and backs off then gives up if the server is unreachable.
+         *
+         * The caller must pair this with [stopPolling], see `DiscoverSeriesDetails`.
+         */
+        fun startPolling() {
+            pollJob?.cancel()
+            pollJob =
+                viewModelScope.launchIO {
+                    var failures = 0
+                    while (isActive) {
+                        val interval = pollInterval() ?: break
+                        delay(interval * (1 shl failures.coerceAtMost(SEERR_MAX_BACKOFF_SHIFT)))
+                        if (refreshStatus()) {
+                            failures = 0
+                        } else {
+                            failures++
+                            if (failures >= SEERR_MAX_POLL_FAILURES) {
+                                Timber.v("Giving up polling tv %s", item.id)
+                                break
+                            }
+                        }
+                    }
+                }
+        }
+
+        fun stopPolling() {
+            pollJob?.cancel()
+            pollJob = null
+        }
+
+        /** The delay before the next refresh, or null when nothing can change */
+        private fun pollInterval(): Duration? {
+            val current = state.value
+            return seerrPollInterval(
+                SeerrAvailability.from(current.tvSeries.successValue?.mediaInfo?.status)
+                    ?: SeerrAvailability.UNKNOWN,
+                current.downloads + current.downloads4k,
+            )
+        }
+
+        /**
+         * Re-read just the details, unlike [init] which also refreshes ratings, similar,
+         * recommendations, credits and trailers
+         *
+         * @return whether the refresh succeeded
+         */
+        private suspend fun refreshStatus(): Boolean {
+            val tv = fetchAndSetItem().await() ?: return false
+            updateSeasonStatus(tv)
+            updateCanCancel()
+            return true
         }
 
         fun requestOnClick() {
@@ -318,4 +400,6 @@ data class DiscoverSeriesState(
     val canCancelRequest: Boolean = false,
     val profileLoading: LoadingState = LoadingState.Pending,
     val requestData: SeerrRequestData = SeerrRequestData(),
+    val downloads: List<SeerrDownload> = emptyList(),
+    val downloads4k: List<SeerrDownload> = emptyList(),
 )

@@ -32,6 +32,7 @@
     <string name="duration_hours">%1$dh</string>
     <string name="duration_minutes">%1$dm</string>
     <string name="duration_seconds">%1$ds</string>
+    <string name="duration_days_hours">%1$dd %2$dh</string>
     <string name="default_track">Default</string>
     <string name="delete">Delete</string>
     <string name="died">Died</string>
@@ -497,6 +498,36 @@
     <string name="upcoming_movies">Upcoming Movies</string>
     <string name="upcoming_tv">Upcoming TV Shows</string>
     <string name="request_4k">Request in 4K</string>
+
+    <!-- Seerr download status -->
+    <string name="seerr_download_queued">Queued</string>
+    <string name="seerr_download_paused">Paused</string>
+    <string name="seerr_download_warning">Warning</string>
+    <string name="seerr_download_failed">Failed</string>
+    <string name="seerr_download_completed">Completed</string>
+    <string name="seerr_downloads_title">Download status</string>
+    <string name="seerr_downloads_title_4k">Download status (4K)</string>
+    <!-- eg "4.10 GB of 7.85 GB" -->
+    <string name="seerr_download_progress">%1$s of %2$s</string>
+    <!-- eg "12m left" -->
+    <string name="seerr_time_left">%1$s left</string>
+    <!-- eg "1 downloading, 3 queued, 1 warning" -->
+    <string name="seerr_download_summary_active">%1$d downloading</string>
+    <string name="seerr_download_summary_queued">%1$d queued</string>
+    <string name="seerr_download_summary_problem">%1$d warning</string>
+    <string name="seerr_download_summary_separator">, </string>
+    <!-- Season/episode code, eg "S01E03" -->
+    <string name="seerr_episode_code">S%1$02dE%2$02d</string>
+    <!-- eg "S01E03 · Read the Room" -->
+    <string name="seerr_episode_label">%1$s · %2$s</string>
+    <plurals name="seerr_downloads_count">
+        <item quantity="one">%1$d download</item>
+        <item quantity="other">%1$d downloads</item>
+    </plurals>
+    <plurals name="seerr_downloads_more">
+        <item quantity="one">+%1$d more</item>
+        <item quantity="other">+%1$d more</item>
+    </plurals>
     <string name="software_decoding_av1">AV1 software decoding</string>
     <string name="upgrade_mpv_toast">MPV is now the default player except for HDR.\nYou can change this in settings.</string>
     <string name="hdr_subtitle_style">HDR subtitle style</string>

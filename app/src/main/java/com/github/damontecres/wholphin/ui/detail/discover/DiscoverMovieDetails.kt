@@ -42,6 +42,7 @@ import com.github.damontecres.wholphin.data.model.DiscoverRating
 import com.github.damontecres.wholphin.data.model.LocalTrailer
 import com.github.damontecres.wholphin.data.model.RemoteTrailer
 import com.github.damontecres.wholphin.data.model.SeerrAvailability
+import com.github.damontecres.wholphin.data.model.SeerrDownload
 import com.github.damontecres.wholphin.data.model.SeerrPermission
 import com.github.damontecres.wholphin.data.model.Trailer
 import com.github.damontecres.wholphin.data.model.hasPermission
@@ -80,7 +81,10 @@ fun DiscoverMovieDetails(
     val context = LocalContext.current
     LifecycleResumeEffect(Unit) {
         viewModel.init()
-        onPauseOrDispose { }
+        // Seerr has no push API, so the status is polled. Tying it to the resumed lifecycle keeps
+        // it from running behind playback, the screensaver, or in the background.
+        viewModel.startPolling()
+        onPauseOrDispose { viewModel.stopPolling() }
     }
     val state by viewModel.state.collectAsState()
     val userConfig by viewModel.userConfig.collectAsState(null)
@@ -88,6 +92,7 @@ fun DiscoverMovieDetails(
 
     var overviewDialog by remember { mutableStateOf<ItemDetailsDialogInfo?>(null) }
     var showRequestDialog by remember { mutableStateOf(false) }
+    var showDownloadsDialog by remember { mutableStateOf(false) }
 
     val requestStr = stringResource(R.string.request)
     val request4kStr = stringResource(R.string.request_4k)
@@ -115,10 +120,13 @@ fun DiscoverMovieDetails(
                 trailers = state.trailers,
                 similar = state.similar,
                 recommended = state.recommended,
+                downloads = state.downloads,
+                downloads4k = state.downloads4k,
                 requestOnClick = {
                     viewModel.requestOnClick()
                     showRequestDialog = true
                 },
+                pendingOnClick = { showDownloadsDialog = true },
                 cancelOnClick = {
                     movie.id?.let { viewModel.cancelRequest(it) }
                 },
@@ -169,6 +177,13 @@ fun DiscoverMovieDetails(
                     onDismissRequest = { showRequestDialog = false },
                 )
             }
+            if (showDownloadsDialog) {
+                SeerrDownloadsDialog(
+                    downloads = state.downloads,
+                    downloads4k = state.downloads4k,
+                    onDismissRequest = { showDownloadsDialog = false },
+                )
+            }
         }
     }
     overviewDialog?.let { info ->
@@ -209,6 +224,9 @@ fun DiscoverMovieDetailsContent(
     onLongClickPerson: (Int, DiscoverItem) -> Unit,
     onLongClickSimilar: (Int, DiscoverItem) -> Unit,
     modifier: Modifier = Modifier,
+    downloads: List<SeerrDownload> = emptyList(),
+    downloads4k: List<SeerrDownload> = emptyList(),
+    pendingOnClick: () -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     var position by rememberInt(0)
@@ -243,11 +261,17 @@ fun DiscoverMovieDetailsContent(
                                 .fillMaxWidth()
                                 .padding(top = 32.dp, bottom = 16.dp),
                     )
+                    SeerrStatusBlock(
+                        downloads = downloads,
+                        downloads4k = downloads4k,
+                        modifier = Modifier.padding(bottom = 16.dp),
+                    )
                     ExpandableDiscoverButtons(
                         availability =
                             SeerrAvailability.from(movie.mediaInfo?.status)
                                 ?: SeerrAvailability.UNKNOWN,
                         requestOnClick = requestOnClick,
+                        pendingOnClick = pendingOnClick,
                         cancelOnClick = cancelOnClick,
                         moreOnClick = moreOnClick,
                         goToOnClick = goToOnClick,

@@ -12,11 +12,17 @@ import com.github.damontecres.wholphin.api.seerr.model.ServiceProfile
 import com.github.damontecres.wholphin.api.seerr.model.TvDetails
 import com.github.damontecres.wholphin.api.seerr.model.TvResult
 import com.github.damontecres.wholphin.data.model.BaseItem
+import com.github.damontecres.wholphin.data.model.CustomDiscoverSlider
+import com.github.damontecres.wholphin.data.model.CustomSliderQuery
 import com.github.damontecres.wholphin.data.model.DiscoverItem
 import com.github.damontecres.wholphin.data.model.SeerrAvailability
+import com.github.damontecres.wholphin.data.model.SeerrDownload
+import com.github.damontecres.wholphin.data.model.SeerrDownloadState
 import com.github.damontecres.wholphin.data.model.SeerrItemType
 import com.github.damontecres.wholphin.data.model.SeerrPermission
 import com.github.damontecres.wholphin.data.model.hasPermission
+import com.github.damontecres.wholphin.data.model.parseTimeLeft
+import com.github.damontecres.wholphin.data.model.toCustomSlider
 import com.github.damontecres.wholphin.ui.detail.discover.SeerrProfile
 import com.github.damontecres.wholphin.ui.detail.discover.SeerrRequestData
 import com.github.damontecres.wholphin.ui.detail.discover.SeerrRootFolder
@@ -93,6 +99,103 @@ class SeerrService
                 .results
                 ?.map { createDiscoverItem(it) }
                 .orEmpty()
+
+        /**
+         * Get the custom discover sliders configured on the server, in the order the admin arranged
+         * them
+         *
+         * Built-in sliders are excluded; those are rendered by the fixed rows on the discover page.
+         * Disabled and unparseable sliders are dropped.
+         */
+        suspend fun customDiscoverSliders(): List<CustomDiscoverSlider> =
+            api.settingsApi
+                .settingsDiscoverGet()
+                .mapNotNull { it.toCustomSlider() }
+                .sortedBy { it.order }
+
+        /**
+         * Fetch a page of items for a [CustomDiscoverSlider]
+         *
+         * @see customDiscoverSliders
+         */
+        suspend fun fetchCustomSlider(
+            query: CustomSliderQuery,
+            page: Int = 1,
+        ): List<DiscoverItem> =
+            when (query) {
+                is CustomSliderQuery.Genre -> {
+                    if (query.itemType == SeerrItemType.TV) {
+                        api.searchApi
+                            .discoverTvGet(page = page, genre = query.genre)
+                            .results
+                            ?.map { createDiscoverItem(it) }
+                    } else {
+                        api.searchApi
+                            .discoverMoviesGet(page = page, genre = query.genre)
+                            .results
+                            ?.map { createDiscoverItem(it) }
+                    }
+                }
+
+                is CustomSliderQuery.Keyword -> {
+                    if (query.itemType == SeerrItemType.TV) {
+                        api.searchApi
+                            .discoverTvGet(page = page, keywords = query.keywords)
+                            .results
+                            ?.map { createDiscoverItem(it) }
+                    } else {
+                        api.searchApi
+                            .discoverMoviesGet(page = page, keywords = query.keywords)
+                            .results
+                            ?.map { createDiscoverItem(it) }
+                    }
+                }
+
+                is CustomSliderQuery.StreamingServices -> {
+                    if (query.itemType == SeerrItemType.TV) {
+                        api.searchApi
+                            .discoverTvGet(
+                                page = page,
+                                watchRegion = query.watchRegion,
+                                watchProviders = query.watchProviders,
+                            ).results
+                            ?.map { createDiscoverItem(it) }
+                    } else {
+                        api.searchApi
+                            .discoverMoviesGet(
+                                page = page,
+                                watchRegion = query.watchRegion,
+                                watchProviders = query.watchProviders,
+                            ).results
+                            ?.map { createDiscoverItem(it) }
+                    }
+                }
+
+                is CustomSliderQuery.Studio -> {
+                    api.searchApi
+                        .discoverMoviesStudioStudioIdGet(
+                            studioId = query.studioId,
+                            page = page,
+                        ).results
+                        ?.map { createDiscoverItem(it) }
+                }
+
+                is CustomSliderQuery.Network -> {
+                    api.searchApi
+                        .discoverTvNetworkNetworkIdGet(
+                            networkId = query.networkId,
+                            page = page,
+                        ).results
+                        ?.map { createDiscoverItem(it) }
+                }
+
+                is CustomSliderQuery.Search -> {
+                    api.searchApi
+                        .searchGet(query = query.query, page = page)
+                        .results
+                        ?.map { createDiscoverItem(it) }
+                }
+            }.orEmpty()
 
         /**
          * Get [DiscoverItem]s similar to the JF items such as movies, series, or people
@@ -464,4 +567,34 @@ class SeerrService
                     ),
                 jellyfinItemId = credit.mediaInfo?.jellyfinMediaId?.toUUIDOrNull(),
             )
+
+        /**
+         * The in-progress Radarr/Sonarr downloads reported alongside an item's media info
+         *
+         * Sorted by season & episode, because Seerr returns them in queue order which is
+         * arbitrary from the viewer's perspective.
+         *
+         * @param is4k read the 4K queue instead of the standard one
+         */
+        fun downloads(
+            mediaInfo: MediaInfo?,
+            is4k: Boolean = false,
+        ): List<SeerrDownload> =
+            (if (is4k) mediaInfo?.downloadStatus4k else mediaInfo?.downloadStatus)
+                .orEmpty()
+                .map { item ->
+                    SeerrDownload(
+                        downloadId = item.downloadId,
+                        releaseTitle = item.title,
+                        episodeTitle = item.episode?.title,
+                        state = SeerrDownloadState.from(item.status),
+                        // `size` is generated as `propertySize` to avoid a name collision
+                        sizeBytes = item.propertySize ?: 0L,
+                        sizeLeftBytes = item.sizeLeft ?: 0L,
+                        timeLeft = parseTimeLeft(item.timeLeft),
+                        rawTimeLeft = item.timeLeft,
+                        seasonNumber = item.episode?.seasonNumber,
+                        episodeNumber = item.episode?.episodeNumber,
+                    )
+                }.sortedWith(compareBy({ it.seasonNumber ?: 0 }, { it.episodeNumber ?: 0 }))
     }
