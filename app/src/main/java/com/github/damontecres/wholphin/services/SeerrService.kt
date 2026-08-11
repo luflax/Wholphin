@@ -13,7 +13,6 @@ import com.github.damontecres.wholphin.api.seerr.model.TvDetails
 import com.github.damontecres.wholphin.api.seerr.model.TvResult
 import com.github.damontecres.wholphin.data.model.BaseItem
 import com.github.damontecres.wholphin.data.model.CustomDiscoverSlider
-import com.github.damontecres.wholphin.data.model.CustomSliderQuery
 import com.github.damontecres.wholphin.data.model.DiscoverItem
 import com.github.damontecres.wholphin.data.model.SeerrAvailability
 import com.github.damontecres.wholphin.data.model.SeerrDownload
@@ -112,90 +111,6 @@ class SeerrService
                 .settingsDiscoverGet()
                 .mapNotNull { it.toCustomSlider() }
                 .sortedBy { it.order }
-
-        /**
-         * Fetch a page of items for a [CustomDiscoverSlider]
-         *
-         * @see customDiscoverSliders
-         */
-        suspend fun fetchCustomSlider(
-            query: CustomSliderQuery,
-            page: Int = 1,
-        ): List<DiscoverItem> =
-            when (query) {
-                is CustomSliderQuery.Genre -> {
-                    if (query.itemType == SeerrItemType.TV) {
-                        api.searchApi
-                            .discoverTvGet(page = page, genre = query.genre)
-                            .results
-                            ?.map { createDiscoverItem(it) }
-                    } else {
-                        api.searchApi
-                            .discoverMoviesGet(page = page, genre = query.genre)
-                            .results
-                            ?.map { createDiscoverItem(it) }
-                    }
-                }
-
-                is CustomSliderQuery.Keyword -> {
-                    if (query.itemType == SeerrItemType.TV) {
-                        api.searchApi
-                            .discoverTvGet(page = page, keywords = query.keywords)
-                            .results
-                            ?.map { createDiscoverItem(it) }
-                    } else {
-                        api.searchApi
-                            .discoverMoviesGet(page = page, keywords = query.keywords)
-                            .results
-                            ?.map { createDiscoverItem(it) }
-                    }
-                }
-
-                is CustomSliderQuery.StreamingServices -> {
-                    if (query.itemType == SeerrItemType.TV) {
-                        api.searchApi
-                            .discoverTvGet(
-                                page = page,
-                                watchRegion = query.watchRegion,
-                                watchProviders = query.watchProviders,
-                            ).results
-                            ?.map { createDiscoverItem(it) }
-                    } else {
-                        api.searchApi
-                            .discoverMoviesGet(
-                                page = page,
-                                watchRegion = query.watchRegion,
-                                watchProviders = query.watchProviders,
-                            ).results
-                            ?.map { createDiscoverItem(it) }
-                    }
-                }
-
-                is CustomSliderQuery.Studio -> {
-                    api.searchApi
-                        .discoverMoviesStudioStudioIdGet(
-                            studioId = query.studioId,
-                            page = page,
-                        ).results
-                        ?.map { createDiscoverItem(it) }
-                }
-
-                is CustomSliderQuery.Network -> {
-                    api.searchApi
-                        .discoverTvNetworkNetworkIdGet(
-                            networkId = query.networkId,
-                            page = page,
-                        ).results
-                        ?.map { createDiscoverItem(it) }
-                }
-
-                is CustomSliderQuery.Search -> {
-                    api.searchApi
-                        .searchGet(query = query.query, page = page)
-                        .results
-                        ?.map { createDiscoverItem(it) }
-                }
-            }.orEmpty()
 
         /**
          * Get [DiscoverItem]s similar to the JF items such as movies, series, or people

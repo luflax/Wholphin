@@ -5,10 +5,12 @@ import com.github.damontecres.wholphin.R
 import com.github.damontecres.wholphin.api.seerr.model.MovieResult
 import com.github.damontecres.wholphin.api.seerr.model.TvResult
 import com.github.damontecres.wholphin.data.filter.DiscoverFilter
+import com.github.damontecres.wholphin.data.model.CustomSliderQuery
 import com.github.damontecres.wholphin.data.model.DiscoverItem
 import com.github.damontecres.wholphin.data.model.SeerrItemType
 import com.github.damontecres.wholphin.services.SeerrApi
 import com.github.damontecres.wholphin.services.SeerrSearchResult
+import com.github.damontecres.wholphin.services.SeerrService
 import com.github.damontecres.wholphin.ui.discover.discoverGenreTitle
 import com.github.damontecres.wholphin.ui.util.ResStringProvider
 import com.github.damontecres.wholphin.ui.util.StringProvider
@@ -48,6 +50,14 @@ enum class DiscoverRequestType(
     TRENDING(R.string.trending),
     UPCOMING_TV(R.string.upcoming_tv),
     UPCOMING_MOVIES(R.string.upcoming_movies),
+
+    /**
+     * A custom slider configured on the Seerr server
+     *
+     * The title always comes from [com.github.damontecres.wholphin.ui.nav.Destination.DiscoverMoreResult.titleOverride],
+     * so [stringRes] is only a fallback.
+     */
+    CUSTOM_SLIDER(R.string.more_to_explore),
     UNKNOWN(R.string.unknown),
 }
 
@@ -138,3 +148,94 @@ val UpcomingMovieRequestHandler =
                 QueryResult(it.results.orEmpty(), it.totalResults ?: 0)
             }
     }
+
+/**
+ * Runs the query behind a custom discover slider configured on the Seerr server
+ *
+ * Each [CustomSliderQuery] variant hits a different endpoint and so returns a different model, hence
+ * the [Any] item type. Pair this with [SeerrService.createDiscoverItem] as the pager's transform,
+ * which dispatches on the runtime type of each result.
+ */
+class CustomSliderRequestHandler(
+    val query: CustomSliderQuery,
+) : DiscoverRequestHandler<Any> {
+    override suspend fun execute(
+        api: SeerrApi,
+        pageNumber: Int,
+    ): QueryResult<Any> {
+        val searchApi = api.api.searchApi
+        return when (query) {
+            is CustomSliderQuery.Genre -> {
+                if (query.itemType == SeerrItemType.TV) {
+                    searchApi.discoverTvGet(page = pageNumber, genre = query.genre).let {
+                        QueryResult<Any>(it.results.orEmpty(), it.totalResults ?: 0)
+                    }
+                } else {
+                    searchApi.discoverMoviesGet(page = pageNumber, genre = query.genre).let {
+                        QueryResult<Any>(it.results.orEmpty(), it.totalResults ?: 0)
+                    }
+                }
+            }
+
+            is CustomSliderQuery.Keyword -> {
+                if (query.itemType == SeerrItemType.TV) {
+                    searchApi.discoverTvGet(page = pageNumber, keywords = query.keywords).let {
+                        QueryResult<Any>(it.results.orEmpty(), it.totalResults ?: 0)
+                    }
+                } else {
+                    searchApi.discoverMoviesGet(page = pageNumber, keywords = query.keywords).let {
+                        QueryResult<Any>(it.results.orEmpty(), it.totalResults ?: 0)
+                    }
+                }
+            }
+
+            is CustomSliderQuery.StreamingServices -> {
+                if (query.itemType == SeerrItemType.TV) {
+                    searchApi
+                        .discoverTvGet(
+                            page = pageNumber,
+                            watchRegion = query.watchRegion,
+                            watchProviders = query.watchProviders,
+                        ).let {
+                            QueryResult<Any>(it.results.orEmpty(), it.totalResults ?: 0)
+                        }
+                } else {
+                    searchApi
+                        .discoverMoviesGet(
+                            page = pageNumber,
+                            watchRegion = query.watchRegion,
+                            watchProviders = query.watchProviders,
+                        ).let {
+                            QueryResult<Any>(it.results.orEmpty(), it.totalResults ?: 0)
+                        }
+                }
+            }
+
+            is CustomSliderQuery.Studio -> {
+                searchApi
+                    .discoverMoviesStudioStudioIdGet(
+                        studioId = query.studioId,
+                        page = pageNumber,
+                    ).let {
+                        QueryResult<Any>(it.results.orEmpty(), it.totalResults ?: 0)
+                    }
+            }
+
+            is CustomSliderQuery.Network -> {
+                searchApi
+                    .discoverTvNetworkNetworkIdGet(
+                        networkId = query.networkId,
+                        page = pageNumber,
+                    ).let {
+                        QueryResult<Any>(it.results.orEmpty(), it.totalResults ?: 0)
+                    }
+            }
+
+            is CustomSliderQuery.Search -> {
+                searchApi.searchGet(query = query.query, page = pageNumber).let {
+                    QueryResult<Any>(it.results.orEmpty(), it.totalResults ?: 0)
+                }
+            }
+        }
+    }
+}

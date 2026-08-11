@@ -27,6 +27,7 @@ import com.github.damontecres.wholphin.data.filter.DiscoverSortAndDirection
 import com.github.damontecres.wholphin.data.filter.FilterValueOption
 import com.github.damontecres.wholphin.data.filter.discoverMovieFilters
 import com.github.damontecres.wholphin.data.filter.discoverTvFilters
+import com.github.damontecres.wholphin.data.model.CustomSliderQuery
 import com.github.damontecres.wholphin.data.model.DiscoverItem
 import com.github.damontecres.wholphin.services.FilterOptionCache
 import com.github.damontecres.wholphin.services.NavigationManager
@@ -39,6 +40,7 @@ import com.github.damontecres.wholphin.ui.detail.CardGrid
 import com.github.damontecres.wholphin.ui.launchDefault
 import com.github.damontecres.wholphin.ui.nav.Destination
 import com.github.damontecres.wholphin.ui.tryRequestFocus
+import com.github.damontecres.wholphin.util.CustomSliderRequestHandler
 import com.github.damontecres.wholphin.util.DataLoadingState
 import com.github.damontecres.wholphin.util.DiscoverMovieRequestHandler
 import com.github.damontecres.wholphin.util.DiscoverRequestPager
@@ -71,6 +73,7 @@ class DiscoverRequestViewModel
         @Assisted val type: DiscoverRequestType,
         @Assisted startIndex: Int,
         @Assisted initialFilter: DiscoverFilter,
+        @Assisted private val sliderQuery: CustomSliderQuery?,
     ) : ViewModel() {
         @AssistedFactory
         interface Factory {
@@ -78,6 +81,7 @@ class DiscoverRequestViewModel
                 type: DiscoverRequestType,
                 startIndex: Int,
                 initialFilter: DiscoverFilter,
+                sliderQuery: CustomSliderQuery?,
             ): DiscoverRequestViewModel
         }
 
@@ -93,6 +97,8 @@ class DiscoverRequestViewModel
                         DiscoverRequestType.TRENDING -> emptyList<DiscoverSort>() to emptyList()
                         DiscoverRequestType.UPCOMING_TV -> emptyList<DiscoverSort>() to emptyList()
                         DiscoverRequestType.UPCOMING_MOVIES -> emptyList<DiscoverSort>() to emptyList()
+                        // The server admin already defined the query, so don't offer to change it
+                        DiscoverRequestType.CUSTOM_SLIDER -> emptyList<DiscoverSort>() to emptyList()
                         DiscoverRequestType.UNKNOWN -> emptyList<DiscoverSort>() to emptyList()
                     }
                 val sortAndDirection =
@@ -102,6 +108,7 @@ class DiscoverRequestViewModel
                         DiscoverRequestType.TRENDING -> DiscoverSortAndDirection()
                         DiscoverRequestType.UPCOMING_TV -> DiscoverSortAndDirection()
                         DiscoverRequestType.UPCOMING_MOVIES -> DiscoverSortAndDirection()
+                        DiscoverRequestType.CUSTOM_SLIDER -> DiscoverSortAndDirection()
                         DiscoverRequestType.UNKNOWN -> DiscoverSortAndDirection()
                     }
                 val filterOptions =
@@ -189,6 +196,18 @@ class DiscoverRequestViewModel
                                     )
                                 }
 
+                                DiscoverRequestType.CUSTOM_SLIDER -> {
+                                    requireNotNull(sliderQuery) {
+                                        "A sliderQuery is required for DiscoverRequestType.CUSTOM_SLIDER"
+                                    }
+                                    DiscoverRequestPager(
+                                        api,
+                                        CustomSliderRequestHandler(sliderQuery),
+                                        seerrService::createDiscoverItem,
+                                        viewModelScope,
+                                    )
+                                }
+
                                 DiscoverRequestType.UNKNOWN -> {
                                     throw IllegalArgumentException("Cannot display grid for DiscoverRequestType.UNKNOWN")
                                 }
@@ -253,6 +272,7 @@ fun DiscoverRequestGrid(
                     destination.type,
                     destination.startIndex,
                     destination.initialFilter,
+                    destination.sliderQuery,
                 )
             },
         ),

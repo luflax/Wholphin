@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -43,6 +42,7 @@ import com.github.damontecres.wholphin.services.BackdropService
 import com.github.damontecres.wholphin.services.NavigationManager
 import com.github.damontecres.wholphin.services.SeerrService
 import com.github.damontecres.wholphin.ui.components.Genre
+import com.github.damontecres.wholphin.ui.components.LoadingPage
 import com.github.damontecres.wholphin.ui.data.RowColumn
 import com.github.damontecres.wholphin.ui.launchIO
 import com.github.damontecres.wholphin.ui.listToDotString
@@ -58,6 +58,7 @@ import com.github.damontecres.wholphin.ui.util.StringProvider
 import com.github.damontecres.wholphin.ui.util.StringStringProvider
 import com.github.damontecres.wholphin.util.DataLoadingState
 import com.github.damontecres.wholphin.util.DiscoverRequestType
+import com.github.damontecres.wholphin.util.completed
 import com.github.damontecres.wholphin.util.successValue
 import com.google.common.cache.CacheBuilder
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -217,63 +218,25 @@ class SeerrDiscoverViewModel
         }
 
         /**
-         * Load the custom sliders configured on the server, then fetch each one's items
+         * Load the custom sliders configured on the server
          *
-         * The rows are seeded in [DataLoadingState.Loading] first so they appear in the admin's
-         * order immediately, rather than popping in as each request finishes.
+         * Only the slider list is fetched here; a slider's items are loaded when the user opens it,
+         * so this costs a single request no matter how many sliders the admin has defined.
          */
         private fun fetchCustomSliders() {
             viewModelScope.launchIO {
+                state.update { it.copy(customSliders = DataLoadingState.Loading) }
                 val sliders =
                     try {
-                        seerrService.customDiscoverSliders()
+                        seerrService.customDiscoverSliders().also {
+                            Timber.v("Got %s custom discover sliders", it.size)
+                        }.let { DataLoadingState.Success(it) }
                     } catch (ex: Exception) {
+                        // The page still becomes ready; it just has no custom slider row
                         Timber.e(ex, "Error getting custom discover sliders")
-                        return@launchIO
+                        DataLoadingState.Error(ex)
                     }
-                Timber.v("Got %s custom discover sliders", sliders.size)
-                state.update { current ->
-                    current.copy(
-                        customSliders =
-                            sliders.map {
-                                CustomSliderRow(
-                                    slider = it,
-                                    row =
-                                        DiscoverRowData(
-                                            title = StringStringProvider(it.title),
-                                            items = DataLoadingState.Loading,
-                                            // Custom sliders have no "view more" grid yet
-                                            type = DiscoverRequestType.UNKNOWN,
-                                        ),
-                                )
-                            },
-                    )
-                }
-                sliders.forEach { slider ->
-                    viewModelScope.launchIO {
-                        val items =
-                            try {
-                                DataLoadingState.Success(
-                                    seerrService.fetchCustomSlider(slider.query),
-                                )
-                            } catch (ex: Exception) {
-                                Timber.e(ex, "Error fetching custom slider %s", slider.id)
-                                DataLoadingState.Error(ex)
-                            }
-                        state.update { current ->
-                            current.copy(
-                                customSliders =
-                                    current.customSliders.map {
-                                        if (it.slider.id == slider.id) {
-                                            it.copy(row = it.row.copy(items = items))
-                                        } else {
-                                            it
-                                        }
-                                    },
-                            )
-                        }
-                    }
-                }
+                state.update { it.copy(customSliders = sliders) }
             }
         }
 
@@ -389,16 +352,6 @@ data class DiscoverRowData(
     }
 }
 
-/**
- * A row driven by a custom discover slider configured on the Seerr server
- *
- * These are appended after the fixed rows, in the order the server admin arranged them.
- */
-data class CustomSliderRow(
-    val slider: CustomDiscoverSlider,
-    val row: DiscoverRowData,
-)
-
 data class DiscoverState(
     val movies: DiscoverRowData = DiscoverRowData.EMPTY,
     val tv: DiscoverRowData = DiscoverRowData.EMPTY,
@@ -407,8 +360,25 @@ data class DiscoverState(
     val upcomingTv: DiscoverRowData = DiscoverRowData.EMPTY,
     val movieGenres: DataLoadingState<List<Genre>> = DataLoadingState.Pending,
     val tvGenres: DataLoadingState<List<Genre>> = DataLoadingState.Pending,
-    val customSliders: List<CustomSliderRow> = emptyList(),
-)
+    val customSliders: DataLoadingState<List<CustomDiscoverSlider>> = DataLoadingState.Pending,
+) {
+    /**
+     * Whether every row has settled, so the page can be shown all at once
+     *
+     * Rows load concurrently and would otherwise pop in one by one, leaving titles above empty
+     * space. A row that failed counts as settled, so one bad endpoint cannot hold up the page.
+     */
+    val ready: Boolean
+        get() =
+            trending.items.completed &&
+                movies.items.completed &&
+                tv.items.completed &&
+                upcomingMovies.items.completed &&
+                upcomingTv.items.completed &&
+                movieGenres.completed &&
+                tvGenres.completed &&
+                customSliders.completed
+}
 
 // Offsets of the fixed rows relative to each other. Custom slider rows are rendered above them, so
 // a fixed row's actual position is its offset shifted by the number of custom sliders.
@@ -422,6 +392,13 @@ private const val ROW_UPCOMING_TV = ROW_GENRES_TV + 1
 
 private const val LAST_ROW = ROW_UPCOMING_TV
 
+/**
+ * Identifies the custom slider row's focus requester slot, not its position
+ *
+ * The row is displayed above the fixed rows, at display position 0.
+ */
+private const val ROW_CUSTOM_SLIDERS = LAST_ROW + 1
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun SeerrDiscoverPage(
@@ -433,37 +410,33 @@ fun SeerrDiscoverPage(
     val state by viewModel.state.collectAsState()
     val ratingMap by viewModel.rating.collectAsState()
 
-    val focusRequesters = remember { List(LAST_ROW + 1) { FocusRequester() } }
+    // One slot per fixed row, plus one for the custom slider row
+    val focusRequesters = remember { List(LAST_ROW + 2) { FocusRequester() } }
 
-    // Sized separately from the fixed rows so the fixed requesters keep their identity when the
-    // custom sliders finish loading and the row count grows
-    val customFocusRequesters =
-        remember(state.customSliders.size) {
-            List(state.customSliders.size) { FocusRequester() }
-        }
+    val customSliders = state.customSliders.successValue.orEmpty()
 
-    val customCount = state.customSliders.size
+    // The custom slider row occupies display position 0 when present, pushing the fixed rows down
+    val customOffset = if (customSliders.isEmpty()) 0 else 1
 
-    /** The on-screen position of a fixed row, shifted down past the custom slider rows */
-    fun rowIndex(fixedRow: Int) = customCount + fixedRow
+    /** The on-screen position of a fixed row, shifted down past the custom slider row */
+    fun rowIndex(fixedRow: Int) = customOffset + fixedRow
 
-    // Falls back to the first row, which can happen if a saved position points at a custom slider
-    // that the server no longer returns
     fun focusRequesterFor(row: Int): FocusRequester =
-        if (row < customCount) {
-            customFocusRequesters.getOrNull(row) ?: focusRequesters[ROW_TRENDING]
+        if (customOffset == 1 && row == 0) {
+            focusRequesters[ROW_CUSTOM_SLIDERS]
         } else {
-            focusRequesters.getOrNull(row - customCount) ?: focusRequesters[ROW_TRENDING]
+            focusRequesters.getOrNull(row - customOffset) ?: focusRequesters[ROW_TRENDING]
         }
 
     var position by rememberPosition(0, -1)
     val focusedItem: DiscoverFocusedItem? =
-        remember(position, state.customSliders) {
+        remember(position, customSliders) {
             position.let {
-                val fixedRow = position.row - customCount
+                val onSliderRow = customOffset == 1 && position.row == 0
+                val fixedRow = position.row - customOffset
                 val discoverRow =
-                    if (position.row < customCount) {
-                        state.customSliders.getOrNull(position.row)?.row
+                    if (onSliderRow) {
+                        null
                     } else {
                         when (fixedRow) {
                             ROW_TRENDING -> state.trending
@@ -474,7 +447,14 @@ fun SeerrDiscoverPage(
                             else -> null
                         }
                     }
-                if (discoverRow != null) {
+                if (onSliderRow) {
+                    customSliders.getOrNull(position.column)?.let { slider ->
+                        DiscoverFocusedItem.Slider(
+                            id = slider.id,
+                            name = slider.title,
+                        )
+                    }
+                } else if (discoverRow != null) {
                     (discoverRow.items as? DataLoadingState.Success)
                         ?.data
                         ?.getOrNull(it.column)
@@ -520,13 +500,18 @@ fun SeerrDiscoverPage(
         viewModel.updateBackdrop(focusedItem)
     }
     var firstFocused by rememberSaveable { mutableStateOf(false) }
-    LaunchedEffect(state.trending) {
-        if (!firstFocused && state.trending.items is DataLoadingState.Success<*>) {
-            // Row 0 is the first custom slider when there are any, otherwise trending
-            firstFocused = focusRequesterFor(0).tryRequestFocus("discover") == true
-        } else if (firstFocused) {
-            focusRequesterFor(position.row).tryRequestFocus()
-        }
+
+    if (!state.ready) {
+        LoadingPage(modifier)
+        return
+    }
+
+    // Runs once, when the finished page first composes. Every row is present and laid out by now,
+    // so row 0 is unambiguous: the custom slider row when the server has any, otherwise trending.
+    LaunchedEffect(Unit) {
+        val target = if (firstFocused) position.row else 0
+        focusRequesterFor(target).tryRequestFocus("discover")
+        firstFocused = true
     }
 
     Column(
@@ -624,12 +609,37 @@ fun SeerrDiscoverPage(
                         .focusRestorer()
                         .fillMaxSize(),
             ) {
-                // Custom sliders configured on the Seerr server, in the admin's order
-                itemsIndexed(
-                    items = state.customSliders,
-                    key = { _, custom -> "custom_slider_${custom.slider.id}" },
-                ) { index, custom ->
-                    discoverItemRow(index, custom.row)
+                // Custom sliders configured on the Seerr server, one card each, in the admin's order
+                if (customSliders.isNotEmpty()) {
+                    item(key = "custom_sliders") {
+                        CompositionLocalProvider(
+                            LocalBringIntoViewSpec provides defaultBringIntoViewSpec,
+                        ) {
+                            DiscoverSliderRow(
+                                title = remember { ResStringProvider(R.string.more_to_explore) },
+                                sliders = customSliders,
+                                onClickItem = { index, slider ->
+                                    position = RowColumn(0, index)
+                                    viewModel.navigationManager.navigateTo(
+                                        Destination.DiscoverMoreResult(
+                                            type = DiscoverRequestType.CUSTOM_SLIDER,
+                                            sliderQuery = slider.query,
+                                            titleOverride = StringStringProvider(slider.title),
+                                            startIndex = 0,
+                                        ),
+                                    )
+                                },
+                                onCardFocus = { index ->
+                                    position = RowColumn(0, index)
+                                    positionCallback.invoke(position)
+                                },
+                                modifier =
+                                    Modifier.focusRequester(
+                                        focusRequesters[ROW_CUSTOM_SLIDERS],
+                                    ),
+                            )
+                        }
+                    }
                 }
 
                 item(key = "trending") { discoverItemRow(rowIndex(ROW_TRENDING), state.trending) }

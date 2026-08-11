@@ -106,3 +106,11 @@ sealed interface DataLoadingState<out T> {
 }
 
 val <T> DataLoadingState<T>.successValue: T? get() = (this as? DataLoadingState.Success<T>)?.data
+
+/**
+ * Whether this state has settled, ie it succeeded or failed and is no longer waiting on data
+ *
+ * @see HomeRowLoadingState.completed
+ */
+val DataLoadingState<*>.completed: Boolean
+    get() = this is DataLoadingState.Success || this is DataLoadingState.Error

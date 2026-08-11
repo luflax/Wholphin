@@ -40,6 +40,25 @@ sealed interface DiscoverFocusedItem {
         override val overview: String?
             get() = null
     }
+
+    /**
+     * A custom discover slider card
+     *
+     * Sliders carry no artwork, so [backDropUrl] is always null and the header shows just the
+     * admin-provided title.
+     */
+    data class Slider(
+        override val id: Int,
+        val name: String,
+    ) : DiscoverFocusedItem {
+        override val title: StringProvider = StringStringProvider(name)
+        override val subtitle: String?
+            get() = null
+        override val overview: String?
+            get() = null
+        override val backDropUrl: String?
+            get() = null
+    }
 }
 
 fun discoverGenreTitle(

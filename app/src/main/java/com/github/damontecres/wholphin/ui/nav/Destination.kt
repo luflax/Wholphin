@@ -6,6 +6,7 @@ import androidx.navigation3.runtime.NavKey
 import com.github.damontecres.wholphin.data.filter.DiscoverFilter
 import com.github.damontecres.wholphin.data.model.BaseItem
 import com.github.damontecres.wholphin.data.model.CollectionFolderFilter
+import com.github.damontecres.wholphin.data.model.CustomSliderQuery
 import com.github.damontecres.wholphin.data.model.DiscoverItem
 import com.github.damontecres.wholphin.data.model.GetItemsFilter
 import com.github.damontecres.wholphin.data.model.HomeRowConfig
@@ -158,6 +159,8 @@ sealed class Destination(
         val startIndex: Int = SEERR_PAGE_SIZE,
         val initialFilter: DiscoverFilter = DiscoverFilter(),
         val titleOverride: StringProvider? = null,
+        /** Required when [type] is [DiscoverRequestType.CUSTOM_SLIDER], ignored otherwise */
+        val sliderQuery: CustomSliderQuery? = null,
     ) : Destination(false)
 
     @Serializable

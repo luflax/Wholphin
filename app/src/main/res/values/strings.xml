@@ -497,6 +497,7 @@
     <string name="trending">Trending</string>
     <string name="upcoming_movies">Upcoming Movies</string>
     <string name="upcoming_tv">Upcoming TV Shows</string>
+    <string name="more_to_explore">More to explore</string>
     <string name="request_4k">Request in 4K</string>
 
     <!-- Seerr download status -->
