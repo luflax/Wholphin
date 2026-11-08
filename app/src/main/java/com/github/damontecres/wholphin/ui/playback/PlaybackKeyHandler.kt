@@ -16,7 +16,6 @@ import kotlin.time.Duration
  * Handles [KeyEvent]s during playback on [PlaybackPage]
  */
 class PlaybackKeyHandler(
-    private val isLtr: Boolean,
     private val player: Player,
     private val controlsEnabled: Boolean,
     private val skipWithLeftRight: Boolean,
@@ -34,6 +33,8 @@ class PlaybackKeyHandler(
     private val isDpadSeekVisible: () -> Boolean = { false },
     private val onDpadSeek: (Long) -> Unit = { },
     private val dpadSeekMode: DpadSeekMode,
+    private val onSeekToNext: () -> Unit,
+    private val onPSeekToPrevious: () -> Unit,
 ) {
     private var leftHandledByRepeat = false
     private var rightHandledByRepeat = false
@@ -53,17 +54,9 @@ class PlaybackKeyHandler(
         if (isDirectionalDpad(it) || isEnterKey(it) || isControllerMedia(it)) {
             if (!controllerViewState.controlsVisible) {
                 if (skipWithLeftRight && isSkipBack(it)) {
-                    if (isLtr) {
-                        seekBy(-seekBack)
-                    } else {
-                        seekBy(seekForward)
-                    }
+                    seekBy(-seekBack)
                 } else if (skipWithLeftRight && isSkipForward(it)) {
-                    if (isLtr) {
-                        seekBy(seekForward)
-                    } else {
-                        seekBy(-seekBack)
-                    }
+                    seekBy(seekForward)
                 } else if (isEnterKey(it) && isDpadSeekVisible()) {
                     // If d-pad seek bar is visible, hide it
                     clearSkipIndicator.invoke()
@@ -98,11 +91,11 @@ class PlaybackKeyHandler(
                 }
 
                 Key.MediaNext -> {
-                    if (player.isCommandAvailable(Player.COMMAND_SEEK_TO_NEXT)) player.seekToNext()
+                    onSeekToNext.invoke()
                 }
 
                 Key.MediaPrevious -> {
-                    if (player.isCommandAvailable(Player.COMMAND_SEEK_TO_PREVIOUS)) player.seekToPrevious()
+                    onPSeekToPrevious.invoke()
                 }
 
                 Key.Captions -> {
@@ -142,7 +135,7 @@ class PlaybackKeyHandler(
             return false
         }
 
-        val isBack = if (isLtr) isSkipBack(event) else isSkipForward(event)
+        val isBack = isSkipBack(event)
         return when (event.type) {
             KeyEventType.KeyDown -> {
                 val repeatCount = event.nativeKeyEvent.repeatCount

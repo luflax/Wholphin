@@ -91,6 +91,7 @@ sealed class Destination(
         val positionMs: Long,
         val forceTranscoding: Boolean = false,
         val backend: PlayerBackend? = null,
+        val shuffle: Boolean = false,
     ) : Destination(true) {
         constructor(item: BaseItem) : this(item.id, item.resumeMs)
     }
@@ -134,7 +135,7 @@ sealed class Destination(
 
     @Serializable
     data class Slideshow(
-        val parentId: UUID,
+        val parentId: UUID?,
         val index: Int,
         val filter: CollectionFolderFilter,
         val sortAndDirection: SortAndDirection,
@@ -151,6 +152,8 @@ sealed class Destination(
     @Serializable
     data class DiscoveredItem(
         val item: DiscoverItem,
+        // Index to scroll to on the person page grid
+        val startIndex: Int = 0,
     ) : Destination(false)
 
     @Serializable

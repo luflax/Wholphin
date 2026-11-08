@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -165,6 +166,7 @@ fun PlaybackPageContent(
     val prefs = preferences.appPreferences.playbackPreferences
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
+    LaunchedEffect(density) { viewModel.updateDensity(density) }
     val userDto by viewModel.currentUserDto.collectAsState()
 
     var showDebugInfo by remember { mutableStateOf(prefs.showDebugInfo) }
@@ -242,11 +244,9 @@ fun PlaybackPageContent(
             )
         seekBarState.onValueChange(skipPosition)
     }
-    val isLtr = LocalLayoutDirection.current == LayoutDirection.Ltr
     val keyHandler =
-        remember(isLtr, preferences) {
+        remember(preferences) {
             PlaybackKeyHandler(
-                isLtr = isLtr,
                 player = player,
                 controlsEnabled = state.nextUp == null,
                 skipWithLeftRight = true,
@@ -269,6 +269,8 @@ fun PlaybackPageContent(
                 },
                 onDpadSeek = onDpadSeek,
                 dpadSeekMode = prefs.dpadSeekMode,
+                onSeekToNext = viewModel::playNextUp,
+                onPSeekToPrevious = viewModel::playPrevious,
             )
         }
 
@@ -319,6 +321,10 @@ fun PlaybackPageContent(
                 } else {
                     player.seekToPrevious()
                 }
+            }
+
+            is PlaybackAction.ChangeBitrate -> {
+                viewModel.changeMaxBitrate(it.maxBitrate)
             }
         }
     }
@@ -389,17 +395,19 @@ fun PlaybackPageContent(
                     Modifier
                         .align(Alignment.BottomCenter),
             ) {
-                DpadSeekOverlay(
-                    player = player,
-                    seekPositionMs = skipPosition,
-                    trickplayInfo = state.currentMediaInfo.trickPlayInfo,
-                    trickplayUrlFor = viewModel::getTrickplayUrl,
-                    modifier =
-                        Modifier
-                            .align(Alignment.BottomCenter)
-                            .padding(bottom = 16.dp)
-                            .fillMaxWidth(.95f),
-                )
+                CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                    DpadSeekOverlay(
+                        player = player,
+                        seekPositionMs = skipPosition,
+                        trickplayInfo = state.currentMediaInfo.trickPlayInfo,
+                        trickplayUrlFor = viewModel::getTrickplayUrl,
+                        modifier =
+                            Modifier
+                                .align(Alignment.BottomCenter)
+                                .padding(bottom = 16.dp)
+                                .fillMaxWidth(.95f),
+                    )
+                }
                 // Clear the overlay after a delay
                 LaunchedEffect(skipIndicatorDuration) {
                     delay(1.5.seconds)
@@ -425,15 +433,23 @@ fun PlaybackPageContent(
                 // Show a small progress bar along the bottom of the screen
                 if (prefs.dpadSeekMode == DpadSeekMode.SEEKBAR_MINIMAL) {
                     val percent = skipPosition.toFloat() / player.duration.toFloat()
-                    Box(
-                        modifier =
+                    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                        Box(
                             Modifier
-                                .align(Alignment.BottomStart)
-                                .background(MaterialTheme.colorScheme.border)
-                                .clip(RectangleShape)
-                                .height(3.dp)
-                                .fillMaxWidth(percent),
-                    )
+                                .fillMaxWidth()
+                                .align(Alignment.BottomCenter),
+                        ) {
+                            Box(
+                                modifier =
+                                    Modifier
+                                        .align(Alignment.BottomStart)
+                                        .background(MaterialTheme.colorScheme.border)
+                                        .clip(RectangleShape)
+                                        .height(3.dp)
+                                        .fillMaxWidth(percent),
+                            )
+                        }
+                    }
                 }
             }
 
@@ -504,7 +520,9 @@ fun PlaybackPageContent(
             val subtitleMaxSize by animateFloatAsState(if (controllerViewState.controlsVisible) .7f else 1f)
             val isImageSubtitles =
                 remember(state.subtitleCues) { state.subtitleCues.firstOrNull()?.bitmap != null }
-            var cueCount by remember { mutableIntStateOf(0) }
+
+            // Reset cueCount when density changes to force re-applying subtitle style
+            var cueCount by remember(density) { mutableIntStateOf(0) }
 
             val subtitleVisible =
                 skipIndicatorDuration == 0L &&
@@ -540,6 +558,7 @@ fun PlaybackPageContent(
                     }
                     subtitleView.setCues(state.subtitleCues)
                     if (state.subtitleCues.size > cueCount) {
+                        Timber.i("Applying subtitle style to SubtitleView")
                         // The output creates a painter for each cue, so need to apply the changes when the number of cues increases
                         Media3SubtitleOverride(subtitleSettings.calculateEdgeSize(density))
                             .apply(subtitleView)
@@ -737,6 +756,7 @@ fun PlaybackPageContent(
                     // TODO Passing through audio prevents changing playback speed
                     // See https://github.com/damontecres/Wholphin/issues/164
                     playbackSpeedEnabled = playerBackend == PlayerBackend.MPV || state.currentPlayback?.audioDecoder != null,
+                    maxBitrate = state.maxBitrate,
                 ),
             onDismissRequest = {
                 playbackDialog =

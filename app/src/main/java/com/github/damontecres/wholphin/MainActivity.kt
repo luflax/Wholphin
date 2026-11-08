@@ -9,6 +9,7 @@ import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
+import androidx.annotation.VisibleForTesting
 import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -28,6 +29,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewModelScope
 import androidx.navigation3.runtime.NavBackStack
 import androidx.tv.material3.ExperimentalTvMaterial3Api
+import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Surface
 import com.github.damontecres.wholphin.data.ServerRepository
 import com.github.damontecres.wholphin.preferences.AppPreferences
@@ -62,6 +64,7 @@ import com.github.damontecres.wholphin.ui.nav.Destination
 import com.github.damontecres.wholphin.ui.playback.PlayExternalViewModel
 import com.github.damontecres.wholphin.ui.showToast
 import com.github.damontecres.wholphin.ui.theme.WholphinTheme
+import com.github.damontecres.wholphin.ui.theme.colors.PurpleThemeColors
 import com.github.damontecres.wholphin.ui.util.ProvideLocalClock
 import com.github.damontecres.wholphin.util.DebugLogTree
 import com.github.damontecres.wholphin.util.ExceptionHandler
@@ -73,7 +76,6 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
@@ -82,7 +84,6 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
-import org.jellyfin.sdk.model.serializer.toUUIDOrNull
 import timber.log.Timber
 import javax.inject.Inject
 import kotlin.time.Duration.Companion.milliseconds
@@ -228,56 +229,54 @@ class MainActivity : AppCompatActivity() {
 
         viewModel.appStart(intent)
         setContent {
-            Surface(
-                Modifier
-                    .fillMaxSize()
-                    .background(Color.Black),
-            ) {
-                val userPreferences by userPreferencesService.flow.collectAsState(null)
-                if (userPreferences == null) {
-                    // Show loading page if it is taking a while to get app preferences
-                    var showLoading by remember { mutableStateOf(false) }
-                    LaunchedEffect(Unit) {
-                        delay(500.milliseconds)
-                        Timber.i("Showing loading page")
-                        showLoading = true
-                    }
-                    if (showLoading) {
-                        Box(
-                            modifier =
-                                Modifier
-                                    .fillMaxSize()
-                                    .background(Color.Black),
-                        ) {
-                            LoadingPage()
+            MaterialTheme(colorScheme = PurpleThemeColors.darkScheme) {
+                Surface(Modifier.fillMaxSize()) {
+                    val userPreferences by userPreferencesService.flow.collectAsState(null)
+                    if (userPreferences == null) {
+                        // Show loading page if it is taking a while to get app preferences
+                        var showLoading by remember { mutableStateOf(false) }
+                        LaunchedEffect(Unit) {
+                            delay(500.milliseconds)
+                            Timber.i("Showing loading page")
+                            showLoading = true
                         }
-                    }
-                } else {
-                    userPreferences?.let { userPreferences ->
-                        val appPreferences = userPreferences.appPreferences
-                        CoilConfig(
-                            prefs = appPreferences,
-                            okHttpClient = okHttpClient,
-                            debugLogging = false,
-                            enableCache = true,
-                        )
-                        LaunchedEffect(appPreferences.debugLogging) {
-                            DebugLogTree.INSTANCE.enabled = appPreferences.debugLogging
-                        }
-                        CompositionLocalProvider(LocalImageUrlService provides imageUrlService) {
-                            WholphinTheme(
-                                true,
-                                appThemeColors = appPreferences.interfacePreferences.appThemeColors,
+                        if (showLoading) {
+                            Box(
+                                modifier =
+                                    Modifier
+                                        .fillMaxSize()
+                                        .background(Color.Black),
                             ) {
-                                ProvideLocalClock {
-                                    MainContent(
-                                        backStack = setupNavigationManager.backStack,
-                                        navigationManager = navigationManager,
-                                        userPreferences = userPreferences,
-                                        backdropService = backdropService,
-                                        screensaverService = screensaverService,
-                                        modifier = Modifier.fillMaxSize(),
-                                    )
+                                LoadingPage()
+                            }
+                        }
+                    } else {
+                        userPreferences?.let { userPreferences ->
+                            val appPreferences = userPreferences.appPreferences
+                            CoilConfig(
+                                prefs = appPreferences,
+                                okHttpClient = okHttpClient,
+                                debugLogging = false,
+                                enableCache = true,
+                            )
+                            LaunchedEffect(appPreferences.debugLogging) {
+                                DebugLogTree.INSTANCE.enabled = appPreferences.debugLogging
+                            }
+                            CompositionLocalProvider(LocalImageUrlService provides imageUrlService) {
+                                WholphinTheme(
+                                    true,
+                                    appThemeColors = appPreferences.interfacePreferences.appThemeColors,
+                                ) {
+                                    ProvideLocalClock {
+                                        MainContent(
+                                            backStack = setupNavigationManager.backStack,
+                                            navigationManager = navigationManager,
+                                            userPreferences = userPreferences,
+                                            backdropService = backdropService,
+                                            screensaverService = screensaverService,
+                                            modifier = Modifier.fillMaxSize(),
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -288,7 +287,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        if (screensaverService.state.value.show) {
+        if (screensaverService.state.value.run { show || showDim }) {
             screensaverService.stop(false)
             screensaverService.pulse()
             return true
@@ -380,7 +379,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
-        Timber.d("onConfigurationChanged")
+        Timber.d("onConfigurationChanged: newConfig=%s", newConfig)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -436,106 +435,27 @@ class MainActivityViewModel
             viewModelScope.launchDefault {
                 mutex.withLock {
                     try {
-                        val result = intent?.let { intentService.parseIntent(intent) }
-                        when (result) {
-                            is IntentResult.Error -> {
-                                setupNavigationManager.navigateTo(SetupDestination.ServerList)
-                                Timber.e("Error parsing intent: %s", result.message)
-                                showToast(context, "Invalid intent: ${result.message}")
-                                return@withLock
-                            }
+                        handleAppUpgrade()
+                    } catch (ex: Exception) {
+                        Timber.e(ex, "Error during app upgrade!")
+                        showToast(
+                            context,
+                            "Error during app upgrade: ${ex.localizedMessage}",
+                        )
+                    }
 
-                            is IntentResult.Target -> {
-                                val current = serverRepository.current.value
-                                if (current != null) {
-                                    Timber.i("Received valid intent, switching to AppContent")
-                                    navigationManager.replace(result.destination)
-                                    setupNavigationManager.navigateTo(
-                                        SetupDestination.AppContent(current),
-                                    )
-                                } else {
-                                    // This should never happen, but just reset app state if it does
-                                    setupNavigationManager.navigateTo(SetupDestination.ServerList)
-                                    Timber.e("Error parsing intent, no user is active")
-                                    showToast(context, "An error occurred parsing the intent")
-                                }
-                                return@withLock
-                            }
-
-                            IntentResult.NoOp,
-                            null,
-                            -> {
-                                // No-op, proceed below
-                            }
+                    try {
+                        val result = handleIntent(intent)
+                        if (result) {
+                            Timber.i("appStart was handled by intent")
+                            return@withLock
                         }
                     } catch (ex: Exception) {
                         Timber.e(ex, "Error parsing intent")
                     }
 
                     try {
-                        val needUpgrade = appUpgradeHandler.needUpgrade()
-                        if (needUpgrade) {
-                            showToast(
-                                context,
-                                context.getString(
-                                    R.string.updated_toast,
-                                    appUpgradeHandler.currentVersion.toString(),
-                                ),
-                            )
-                            appUpgradeHandler.run()
-                        }
-                        appUpgradeHandler.copySubfont(false)
-                        val prefs =
-                            preferences.data.firstOrNull() ?: AppPreferences.getDefaultInstance()
-                        val profileProtected =
-                            serverRepository.current.value
-                                ?.user
-                                ?.isProtected == true
-                        if (prefs.signInAutomatically && !profileProtected) {
-                            val current =
-                                serverRepository.restoreSession(
-                                    prefs.currentServerId?.toUUIDOrNull(),
-                                    prefs.currentUserId?.toUUIDOrNull(),
-                                )
-                            if (current != null) {
-                                if (current.user.hasPin || current.user.requireLogin) {
-                                    setupNavigationManager.navigateTo(
-                                        SetupDestination.UserList(
-                                            current.server,
-                                        ),
-                                    )
-                                } else {
-                                    // Restored
-                                    setupNavigationManager.navigateTo(
-                                        SetupDestination.AppContent(
-                                            current,
-                                        ),
-                                    )
-                                }
-                            } else {
-                                // Did not restore
-                                setupNavigationManager.navigateTo(SetupDestination.ServerList)
-                            }
-                        } else {
-                            setupNavigationManager.navigateTo(SetupDestination.Loading)
-                            backdropService.clearBackdrop()
-                            val currentServerId = prefs.currentServerId?.toUUIDOrNull()
-                            if (currentServerId != null) {
-                                val currentServer =
-                                    serverRepository.serverDao.getServer(currentServerId)?.server
-                                if (currentServer != null) {
-                                    setupNavigationManager.navigateTo(
-                                        SetupDestination.UserList(
-                                            currentServer,
-                                        ),
-                                    )
-                                } else {
-                                    setupNavigationManager.navigateTo(SetupDestination.ServerList)
-                                }
-                            } else {
-                                setupNavigationManager.navigateTo(SetupDestination.ServerList)
-                            }
-                        }
+                        handleAppStart()
                     } catch (ex: Exception) {
                         Timber.e(ex, "Error during appStart")
                         setupNavigationManager.navigateTo(SetupDestination.ServerList)
@@ -558,6 +478,103 @@ class MainActivityViewModel
                         Timber.w(ex, "Error during appResume")
                     }
                 }
+            }
+        }
+
+        /**
+         * Handle an [Intent], navigating if needed
+         *
+         * @return true if the intent was handled, false if normal app start should proceed
+         */
+        @VisibleForTesting
+        internal suspend fun handleIntent(intent: Intent?): Boolean {
+            val result = intent?.let { intentService.parseIntent(intent) }
+            when (result) {
+                is IntentResult.Error -> {
+                    val current = serverRepository.current.value
+                    val destination =
+                        if (current != null) {
+                            SetupDestination.UserList(current.server)
+                        } else {
+                            SetupDestination.ServerList
+                        }
+                    setupNavigationManager.navigateTo(destination)
+                    Timber.e("Error parsing intent: %s", result.message)
+                    showToast(context, result.message)
+                    return true
+                }
+
+                is IntentResult.Target -> {
+                    val current = serverRepository.current.value
+                    if (current != null) {
+                        Timber.i("Received valid intent, switching to AppContent")
+
+                        if (result.addHomeToBackStack) {
+                            navigationManager.reloadHome()
+                        } else {
+                            navigationManager.backStack.clear()
+                        }
+                        navigationManager.backStack.addAll(result.destinations)
+
+                        setupNavigationManager.navigateTo(
+                            SetupDestination.AppContent(current),
+                        )
+                    } else {
+                        // This should never happen, but just reset app state if it does
+                        setupNavigationManager.navigateTo(SetupDestination.ServerList)
+                        Timber.e("Error parsing intent, no user is active")
+                        showToast(context, "An error occurred parsing the intent")
+                    }
+                    return true
+                }
+
+                IntentResult.NoOp,
+                null,
+                -> {
+                    // Not handled
+                    return false
+                }
+            }
+        }
+
+        private suspend fun handleAppUpgrade() {
+            val needUpgrade = appUpgradeHandler.needUpgrade()
+            if (needUpgrade) {
+                showToast(
+                    context,
+                    context.getString(
+                        R.string.updated_toast,
+                        appUpgradeHandler.currentVersion.toString(),
+                    ),
+                )
+                appUpgradeHandler.run()
+            }
+            appUpgradeHandler.copySubfont(false)
+        }
+
+        /**
+         * Handle starting the app including auto sign in and navigating to the right starting page
+         */
+        @VisibleForTesting
+        internal suspend fun handleAppStart() {
+            val signInAutomatically = preferences.data.first().signInAutomatically
+            val currentUser = serverRepository.current.value
+            if (signInAutomatically && currentUser != null && !currentUser.user.isProtected) {
+                // Hot reload
+                Timber.v("Hot reload restoring state")
+                setupNavigationManager.navigateTo(
+                    SetupDestination.AppContent(currentUser),
+                )
+            } else {
+                val restoredSession =
+                    if (signInAutomatically) {
+                        Timber.v("Sign in automatically")
+                        serverRepository.restoreLastSession()
+                    } else {
+                        serverRepository.getMostRecentServer()
+                    }
+                Timber.d("Restore last session result=%s", restoredSession)
+                setupNavigationManager.navigateTo(restoredSession.destination)
             }
         }
     }

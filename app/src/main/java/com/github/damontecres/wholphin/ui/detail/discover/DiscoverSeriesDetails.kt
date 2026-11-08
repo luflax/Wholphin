@@ -27,13 +27,10 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.LifecycleResumeEffect
-import androidx.tv.material3.MaterialTheme
-import androidx.tv.material3.Text
 import com.github.damontecres.wholphin.R
 import com.github.damontecres.wholphin.api.seerr.model.TvDetails
 import com.github.damontecres.wholphin.data.model.BaseItem
@@ -41,12 +38,13 @@ import com.github.damontecres.wholphin.data.model.DiscoverItem
 import com.github.damontecres.wholphin.data.model.DiscoverRating
 import com.github.damontecres.wholphin.data.model.SeerrAvailability
 import com.github.damontecres.wholphin.data.model.SeerrDownload
-import com.github.damontecres.wholphin.data.model.SeerrPermission
 import com.github.damontecres.wholphin.data.model.Trailer
-import com.github.damontecres.wholphin.data.model.hasPermission
+import com.github.damontecres.wholphin.data.model.canRequestTv
 import com.github.damontecres.wholphin.preferences.UserPreferences
 import com.github.damontecres.wholphin.services.SeerrUserConfig
 import com.github.damontecres.wholphin.services.TrailerService
+import com.github.damontecres.wholphin.services.jellyfinId
+import com.github.damontecres.wholphin.ui.LocalImageUrlService
 import com.github.damontecres.wholphin.ui.cards.DiscoverItemCard
 import com.github.damontecres.wholphin.ui.cards.DiscoverPersonRow
 import com.github.damontecres.wholphin.ui.cards.ItemRow
@@ -55,9 +53,11 @@ import com.github.damontecres.wholphin.ui.components.DialogParams
 import com.github.damontecres.wholphin.ui.components.DialogPopup
 import com.github.damontecres.wholphin.ui.components.ErrorMessage
 import com.github.damontecres.wholphin.ui.components.GenreText
+import com.github.damontecres.wholphin.ui.components.HeaderUtils
 import com.github.damontecres.wholphin.ui.components.LoadingPage
 import com.github.damontecres.wholphin.ui.components.OverviewText
 import com.github.damontecres.wholphin.ui.components.QuickDetailsText
+import com.github.damontecres.wholphin.ui.components.TitleOrLogo
 import com.github.damontecres.wholphin.ui.data.ItemDetailsDialog
 import com.github.damontecres.wholphin.ui.data.ItemDetailsDialogInfo
 import com.github.damontecres.wholphin.ui.formatDuration
@@ -72,7 +72,7 @@ import com.github.damontecres.wholphin.util.ExceptionHandler
 import com.github.damontecres.wholphin.util.successValue
 import kotlinx.coroutines.launch
 import org.jellyfin.sdk.model.api.BaseItemKind
-import org.jellyfin.sdk.model.serializer.toUUIDOrNull
+import org.jellyfin.sdk.model.api.ImageType
 import kotlin.time.Duration.Companion.minutes
 
 @Composable
@@ -88,7 +88,8 @@ fun DiscoverSeriesDetails(
     val context = LocalContext.current
     val resources = LocalResources.current
     val state by viewModel.state.collectAsState()
-    val request4kEnabled by viewModel.request4kEnabled.collectAsState(false)
+    val requestEnabled by viewModel.requestEnabled.collectAsState()
+    val request4kEnabled by viewModel.request4kEnabled.collectAsState()
 
     // Seerr has no push API, so the status is polled. Tying it to the resumed lifecycle keeps it
     // from running behind playback, the screensaver, or in the background.
@@ -119,6 +120,7 @@ fun DiscoverSeriesDetails(
             DiscoverSeriesDetailsContent(
                 preferences = preferences,
                 series = item,
+                availability = state.availability,
                 userConfig = userConfig,
                 rating = state.rating,
                 canCancel = state.canCancelRequest,
@@ -136,14 +138,7 @@ fun DiscoverSeriesDetails(
                     viewModel.navigateTo(Destination.DiscoveredItem(it))
                 },
                 goToOnClick = {
-                    item.mediaInfo?.jellyfinMediaId?.toUUIDOrNull()?.let {
-                        viewModel.navigateTo(
-                            Destination.MediaItem(
-                                itemId = it,
-                                type = BaseItemKind.MOVIE,
-                            ),
-                        )
-                    }
+                    viewModel.goTo(item.mediaInfo, BaseItemKind.SERIES)
                 },
                 overviewOnClick = {
                     overviewDialog =
@@ -203,6 +198,8 @@ fun DiscoverSeriesDetails(
             id = state.tvSeries.successValue?.id ?: -1,
             title = state.tvSeries.successValue?.name ?: "",
             seasons = state.seasons,
+            seasons4k = state.seasons4k,
+            requestEnabled = requestEnabled,
             request4kEnabled = request4kEnabled,
             onSubmit = {
                 showRequestSeasonDialog = false
@@ -227,6 +224,7 @@ fun DiscoverSeriesDetailsContent(
     preferences: UserPreferences,
     userConfig: SeerrUserConfig?,
     series: TvDetails,
+    availability: SeerrAvailability,
     rating: DiscoverRating?,
     canCancel: Boolean,
     seasons: List<RequestSeason>,
@@ -266,7 +264,6 @@ fun DiscoverSeriesDetailsContent(
         Column(
             modifier =
                 Modifier
-                    .padding(16.dp)
                     .fillMaxSize(),
         ) {
             LazyColumn(
@@ -286,10 +283,11 @@ fun DiscoverSeriesDetailsContent(
                             series = series,
                             rating = rating,
                             overviewOnClick = overviewOnClick,
+                            showLogo = preferences.appPreferences.interfacePreferences.showLogos,
                             modifier =
                                 Modifier
                                     .fillMaxWidth()
-                                    .padding(top = 32.dp, bottom = 16.dp),
+                                    .padding(top = HeaderUtils.topPadding, bottom = 16.dp),
                         )
                         SeerrStatusBlock(
                             downloads = downloads,
@@ -297,9 +295,7 @@ fun DiscoverSeriesDetailsContent(
                             modifier = Modifier.padding(bottom = 16.dp),
                         )
                         ExpandableDiscoverButtons(
-                            availability =
-                                SeerrAvailability.from(series.mediaInfo?.status)
-                                    ?: SeerrAvailability.UNKNOWN,
+                            availability = availability,
                             requestOnClick = requestOnClick,
                             pendingOnClick = requestOnClick,
                             cancelOnClick = cancelOnClick,
@@ -313,7 +309,7 @@ fun DiscoverSeriesDetailsContent(
                                     }
                                 }
                             },
-                            canRequest = userConfig.hasPermission(SeerrPermission.REQUEST),
+                            canRequest = userConfig.canRequestTv,
                             canCancel = canCancel,
                             trailers = trailers,
                             trailerOnClick = trailerOnClick,
@@ -447,24 +443,33 @@ fun DiscoverSeriesDetailsHeader(
     series: TvDetails,
     rating: DiscoverRating?,
     overviewOnClick: () -> Unit,
+    showLogo: Boolean,
     modifier: Modifier = Modifier,
 ) {
+    val imageUrlService = LocalImageUrlService.current
+    val logoImageUrl =
+        remember(series) {
+            series.mediaInfo?.jellyfinId?.let {
+                imageUrlService.getItemImageUrl(it, ImageType.LOGO)
+            }
+        }
     Column(
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
         modifier = modifier,
     ) {
-        Text(
-            text = series.name ?: stringResource(R.string.unknown),
-            style = MaterialTheme.typography.displaySmall,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.fillMaxWidth(.75f),
+        TitleOrLogo(
+            title = series.name,
+            logoImageUrl = logoImageUrl,
+            showLogo = showLogo,
+            modifier =
+                Modifier
+                    .fillMaxWidth(.75f)
+                    .padding(start = HeaderUtils.startPadding),
         )
         Column(
             verticalArrangement = Arrangement.spacedBy(4.dp),
             modifier = Modifier.fillMaxWidth(.60f),
         ) {
-            val padding = 4.dp
             val resources = LocalResources.current
             val details =
                 remember(series, rating, resources) {
@@ -486,9 +491,9 @@ fun DiscoverSeriesDetailsHeader(
                     }
                 }
 
-            QuickDetailsText(details)
+            QuickDetailsText(details, Modifier.padding(start = HeaderUtils.startPadding))
             series.genres?.mapNotNull { it.name }?.letNotEmpty {
-                GenreText(it, Modifier.padding(bottom = padding))
+                GenreText(it, Modifier.padding(start = HeaderUtils.startPadding, bottom = 4.dp))
             }
             series.overview?.let { overview ->
                 OverviewText(

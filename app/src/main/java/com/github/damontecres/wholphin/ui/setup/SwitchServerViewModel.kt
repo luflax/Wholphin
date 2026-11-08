@@ -1,7 +1,11 @@
 package com.github.damontecres.wholphin.ui.setup
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Build
 import android.widget.Toast
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.github.damontecres.wholphin.R
@@ -22,6 +26,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import org.jellyfin.sdk.Jellyfin
 import org.jellyfin.sdk.api.client.HttpClientOptions
+import org.jellyfin.sdk.api.client.exception.TimeoutException
 import org.jellyfin.sdk.api.client.extensions.systemApi
 import org.jellyfin.sdk.discovery.RecommendedServerInfoScore
 import org.jellyfin.sdk.discovery.RecommendedServerIssue
@@ -44,6 +49,17 @@ class SwitchServerViewModel
     ) : ViewModel() {
         private val _state = MutableStateFlow(SwitchServerState())
         val state: StateFlow<SwitchServerState> = _state
+
+        val hasPermission: Boolean
+            get() =
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.CINNAMON_BUN) {
+                    ContextCompat.checkSelfPermission(
+                        context,
+                        Manifest.permission.ACCESS_LOCAL_NETWORK,
+                    ) == PackageManager.PERMISSION_GRANTED
+                } else {
+                    true
+                }
 
         fun clearAddServerState() {
             _state.update { it.copy(addServerState = LoadingState.Pending) }
@@ -81,6 +97,8 @@ class SwitchServerViewModel
                         result.systemInfo.version?.let { ServerVersion.fromString(it) }
                     if (serverVersion == null || serverVersion < WholphinApplication.minimumServerVersion) {
                         ServerVersionSupported.NOT_SUPPORTED
+                    } else if (serverVersion < WholphinApplication.newMinimumServerVersion) {
+                        ServerVersionSupported.NOT_SUPPORTED_IN_FUTURE
                     } else {
                         ServerVersionSupported.SUPPORTED
                     }
@@ -134,6 +152,14 @@ class SwitchServerViewModel
                             .getPublicSystemInfo()
                             .content
                     ServerConnectionStatus.Success(systemInfo)
+                } catch (ex: TimeoutException) {
+                    Timber.w(ex, "timeout checking server ${server.url}")
+                    val cause = ex.cause
+                    if (cause is java.net.ConnectException) {
+                        ServerConnectionStatus.Error("${cause.localizedMessage}")
+                    } else {
+                        ServerConnectionStatus.Error(ex.localizedMessage)
+                    }
                 } catch (ex: Exception) {
                     Timber.w(ex, "Error checking server ${server.url}")
                     ServerConnectionStatus.Error(ex.localizedMessage)
@@ -155,12 +181,15 @@ class SwitchServerViewModel
                     serverRepository.addAndChangeServer(updatedServer)
                     navigationManager.navigateTo(SetupDestination.UserList(updatedServer))
                 } else if (result is ServerConnectionStatus.Error) {
-                    showToast(context, "Error connecting: $${result.message}")
+                    showToast(context, "Error connecting: ${result.message}")
                 }
             }
         }
 
-        fun addServer(inputUrl: String) {
+        fun addServer(
+            inputUrl: String,
+            showToast: Boolean,
+        ) {
             _state.update { it.copy(addServerState = LoadingState.Loading) }
             viewModelScope.launchIO {
                 try {
@@ -186,7 +215,9 @@ class SwitchServerViewModel
                             _state.update { it.copy(addServerState = LoadingState.Success) }
                             navigationManager.navigateTo(SetupDestination.UserList(server))
                         } else {
-                            _state.update { it.copy(addServerState = LoadingState.Error("Server returned invalid response")) }
+                            val msg = "Server returned invalid response"
+                            _state.update { it.copy(addServerState = LoadingState.Error(msg)) }
+                            if (showToast) showToast(context, msg)
                         }
                     } else {
                         Timber.w("Error connecting with %s: %s", inputUrl, scores)
@@ -215,10 +246,12 @@ class SwitchServerViewModel
                             }
                         val message = "Error, tried addresses:\n$errors"
                         _state.update { it.copy(addServerState = LoadingState.Error(message)) }
+                        if (showToast) showToast(context, message)
                     }
                 } catch (ex: Exception) {
                     Timber.w(ex, "Error creating API for $inputUrl")
                     _state.update { it.copy(addServerState = LoadingState.Error(exception = ex)) }
+                    if (showToast) showToast(context, "Error: ${ex.localizedMessage}")
                 }
             }
         }
@@ -247,6 +280,9 @@ class SwitchServerViewModel
                                     .toMutableList()
                                     .apply {
                                         add(jellyfinServer)
+                                    }.distinctBy {
+                                        // Filter out duplicates within the discovered servers list (same URL appearing multiple times)
+                                        it.url.lowercase().trim()
                                     },
                         )
                     }
@@ -273,4 +309,5 @@ enum class ServerVersionSupported {
     SUPPORTED,
     NOT_SUPPORTED,
     UNKNOWN,
+    NOT_SUPPORTED_IN_FUTURE,
 }

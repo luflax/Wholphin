@@ -11,6 +11,8 @@ import com.github.damontecres.wholphin.data.model.JellyfinServer
 import com.github.damontecres.wholphin.data.model.JellyfinUser
 import com.github.damontecres.wholphin.data.model.Playlist
 import com.github.damontecres.wholphin.data.model.PlaylistItem
+import com.github.damontecres.wholphin.data.model.SeriesTrackChoiceType
+import com.github.damontecres.wholphin.data.model.ServerUserConfig
 import com.github.damontecres.wholphin.preferences.AppPreferences
 import com.github.damontecres.wholphin.preferences.PlaybackPreferences
 import com.github.damontecres.wholphin.preferences.ShowNextUpWhen
@@ -28,6 +30,8 @@ import com.github.damontecres.wholphin.services.PlaylistCreationResult
 import com.github.damontecres.wholphin.services.PlaylistCreator
 import com.github.damontecres.wholphin.services.RefreshRateService
 import com.github.damontecres.wholphin.services.ScreensaverService
+import com.github.damontecres.wholphin.services.StreamChoiceReason
+import com.github.damontecres.wholphin.services.StreamChoiceResult
 import com.github.damontecres.wholphin.services.StreamChoiceService
 import com.github.damontecres.wholphin.services.UserPreferencesService
 import com.github.damontecres.wholphin.test.TestTracks
@@ -63,12 +67,12 @@ import org.jellyfin.sdk.api.operations.UserLibraryApi
 import org.jellyfin.sdk.api.operations.VideosApi
 import org.jellyfin.sdk.model.DeviceInfo
 import org.jellyfin.sdk.model.UUID
+import org.jellyfin.sdk.model.api.BaseItemDto
 import org.jellyfin.sdk.model.api.MediaSegmentDto
 import org.jellyfin.sdk.model.api.MediaSegmentDtoQueryResult
 import org.jellyfin.sdk.model.api.MediaSegmentType
 import org.jellyfin.sdk.model.api.MediaStreamType
 import org.jellyfin.sdk.model.api.PlaybackInfoResponse
-import org.jellyfin.sdk.model.api.UserDto
 import org.jellyfin.sdk.model.extensions.inWholeTicks
 import org.jellyfin.sdk.model.extensions.ticks
 import org.junit.After
@@ -77,10 +81,12 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
 @RunWith(RobolectricTestRunner::class)
+@Config(manifest = Config.NONE, sdk = [30])
 class PlaybackViewModelTests {
     private val testDispatcher = StandardTestDispatcher()
 
@@ -150,13 +156,9 @@ class PlaybackViewModelTests {
             pin = "1234",
         )
     private val userDto =
-        UserDto(
+        ServerUserConfig(
             id = userId,
             name = "test-user",
-            serverName = "test server",
-            hasPassword = true,
-            hasConfiguredPassword = true,
-            hasConfiguredEasyPassword = false,
         )
 
     private val mediaSource =
@@ -203,7 +205,12 @@ class PlaybackViewModelTests {
 
         coEvery { mockItemPlaybackDao.getItem(user, any()) } returns null
         coEvery { mockStreamChoiceService.chooseSource(any(), any()) } returns mediaSource
-        coEvery { mockStreamChoiceService.getPlaybackLanguageChoice(any()) } returns null
+        coEvery {
+            mockStreamChoiceService.getSeriesTrackChoices(
+                any<BaseItemDto>(),
+                any<SeriesTrackChoiceType>(),
+            )
+        } returns emptyList()
         coEvery { mockPlayerFactory.createVideoPlayer(any(), any()) } returns
             PlayerCreation(mockPlayer)
         every { mockPlayerFactory.createMediaSession(any()) } returns mockk(relaxed = true)
@@ -216,18 +223,26 @@ class PlaybackViewModelTests {
                 any(),
                 any(),
             )
-        } returns mediaSource.mediaStreams!!.first { it.type == MediaStreamType.AUDIO }
+        } returns
+            StreamChoiceResult(
+                mediaSource.mediaStreams!!.first { it.type == MediaStreamType.AUDIO },
+                StreamChoiceReason.Unknown,
+            )
 
         coEvery {
             mockStreamChoiceService.chooseSubtitleStream(
+                item = any(),
                 source = mediaSource,
-                any(),
-                any(),
-                any(),
-                any(),
-                any(),
+                audioStream = any(),
+                itemPlayback = any(),
+                stc = any(),
+                prefs = any(),
             )
-        } returns mediaSource.mediaStreams!!.first { it.type == MediaStreamType.SUBTITLE }
+        } returns
+            StreamChoiceResult(
+                mediaSource.mediaStreams!!.first { it.type == MediaStreamType.SUBTITLE },
+                StreamChoiceReason.Unknown,
+            )
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -276,6 +291,49 @@ class PlaybackViewModelTests {
             ?.let { throw it }
         return viewModel
     }
+
+    @Test
+    fun `Direct play includes the opened live stream ID`() =
+        runTest(testDispatcher) {
+            setupPreferences { cinemaMode = false }
+            val liveStreamId = "opened-live-stream"
+            val liveSource = mediaSource.copy(liveStreamId = liveStreamId)
+            coEvery { mockUserLibraryApi.getItem(movie.id) } returns successResponse(movie)
+            coEvery { mockMediaInfoApi.getPostedPlaybackInfo(any(), any()) } returns
+                successResponse(
+                    PlaybackInfoResponse(
+                        mediaSources = listOf(liveSource),
+                        playSessionId = playSessionId,
+                    ),
+                )
+            every {
+                mockVideosApi.getVideoStreamUrl(
+                    itemId = movie.id,
+                    mediaSourceId = liveSource.id,
+                    liveStreamId = liveSource.liveStreamId,
+                    static = true,
+                    tag = liveSource.eTag,
+                    playSessionId = playSessionId,
+                )
+            } returns videoStreamUrl
+
+            createViewModel(Destination.Playback(movie.id, 0L))
+
+            val mediaItem = slot<MediaItem>()
+            verify(exactly = 1) { mockPlayer.setMediaItem(capture(mediaItem), any<Long>()) }
+            val playbackUri = mediaItem.captured.localConfiguration?.uri
+            Assert.assertEquals(videoStreamUrl, playbackUri.toString())
+            verify(exactly = 1) {
+                mockVideosApi.getVideoStreamUrl(
+                    itemId = movie.id,
+                    mediaSourceId = liveSource.id,
+                    liveStreamId = liveStreamId,
+                    static = true,
+                    tag = liveSource.eTag,
+                    playSessionId = playSessionId,
+                )
+            }
+        }
 
     @Test
     fun `Play intro first`() =

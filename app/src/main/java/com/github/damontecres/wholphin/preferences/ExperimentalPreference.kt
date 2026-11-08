@@ -37,10 +37,32 @@ object ExperimentalPreference {
             summaryOff = R.string.disabled,
         )
 
+    val PreferDolbyVisionOverHdr10Plus =
+        AppSwitchPreference<AppPreferences>(
+            title = R.string.prefer_dovi_over_hdr10_plus,
+            defaultValue = false,
+            getter = { it.experimentalPreferences.preferDolbyVisionOverHdr10Plus },
+            setter = { prefs, value ->
+                prefs.updateExperimentalPreferences { preferDolbyVisionOverHdr10Plus = value }
+            },
+            summary = R.string.prefer_dovi_over_hdr10_plus_summary,
+        )
+
+    val ConvertDolbyVisionProfile7 =
+        AppSwitchPreference<AppPreferences>(
+            title = R.string.convert_dovi_profile_7,
+            defaultValue = false,
+            getter = { it.experimentalPreferences.convertDolbyVisionProfile7 },
+            setter = { prefs, value ->
+                prefs.updateExperimentalPreferences { convertDolbyVisionProfile7 = value }
+            },
+            summary = R.string.convert_dovi_profile_7_summary,
+        )
+
     val PreferAc3ForSurround =
         AppSwitchPreference<AppPreferences>(
             title = R.string.prefer_ac3_for_surround,
-            defaultValue = true,
+            defaultValue = false,
             getter = { it.experimentalPreferences.preferAc3Surround },
             setter = { prefs, value ->
                 prefs.updateExperimentalPreferences {
@@ -60,6 +82,17 @@ object ExperimentalPreference {
                 }
             },
         )
+
+    val DisableAudioOffload =
+        AppSwitchPreference<AppPreferences>(
+            title = R.string.disable_audio_offload,
+            defaultValue = false,
+            getter = { it.experimentalPreferences.disableAudioOffload },
+            setter = { prefs, value ->
+                prefs.updateExperimentalPreferences { disableAudioOffload = value }
+            },
+            summary = R.string.disable_audio_offload_summary,
+        )
 }
 
 val experimentalPreferences =
@@ -70,7 +103,10 @@ val experimentalPreferences =
                 preferences =
                     listOf(
                         ExperimentalPreference.VideoTunneling,
+                        ExperimentalPreference.PreferDolbyVisionOverHdr10Plus,
+                        ExperimentalPreference.ConvertDolbyVisionProfile7,
                         ExperimentalPreference.PreferAc3ForSurround,
+                        ExperimentalPreference.DisableAudioOffload,
                     ),
             ),
         )

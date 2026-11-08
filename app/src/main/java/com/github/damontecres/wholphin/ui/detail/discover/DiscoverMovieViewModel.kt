@@ -3,6 +3,7 @@ package com.github.damontecres.wholphin.ui.detail.discover
 import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.github.damontecres.wholphin.api.seerr.model.MediaInfo
 import com.github.damontecres.wholphin.api.seerr.model.MediaRequest
 import com.github.damontecres.wholphin.api.seerr.model.MovieDetails
 import com.github.damontecres.wholphin.api.seerr.model.RelatedVideo
@@ -15,6 +16,7 @@ import com.github.damontecres.wholphin.data.model.SEERR_MAX_BACKOFF_SHIFT
 import com.github.damontecres.wholphin.data.model.SEERR_MAX_POLL_FAILURES
 import com.github.damontecres.wholphin.data.model.SeerrAvailability
 import com.github.damontecres.wholphin.data.model.SeerrDownload
+import com.github.damontecres.wholphin.data.model.RequestStatus
 import com.github.damontecres.wholphin.data.model.SeerrItemType
 import com.github.damontecres.wholphin.data.model.SeerrPermission
 import com.github.damontecres.wholphin.data.model.Trailer
@@ -25,7 +27,9 @@ import com.github.damontecres.wholphin.services.NavigationManager
 import com.github.damontecres.wholphin.services.SeerrServerRepository
 import com.github.damontecres.wholphin.services.SeerrService
 import com.github.damontecres.wholphin.services.SeerrUserConfig
+import com.github.damontecres.wholphin.ui.equalsNotNull
 import com.github.damontecres.wholphin.ui.isNotNullOrBlank
+import com.github.damontecres.wholphin.ui.launchDefault
 import com.github.damontecres.wholphin.ui.launchIO
 import com.github.damontecres.wholphin.ui.nav.Destination
 import com.github.damontecres.wholphin.ui.showToast
@@ -49,6 +53,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import org.jellyfin.sdk.api.client.ApiClient
+import org.jellyfin.sdk.model.api.BaseItemKind
 import timber.log.Timber
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.time.Duration
@@ -77,6 +82,8 @@ class DiscoverMovieViewModel
         private var pollJob: Job? = null
 
         val userConfig = seerrServerRepository.current.map { it?.config }
+        val requestEnabled =
+            seerrServerRepository.current.map { it?.requestMovieEnabled ?: false }
         val request4kEnabled =
             seerrServerRepository.current.map { it?.request4kMovieEnabled ?: false }
 
@@ -126,9 +133,13 @@ class DiscoverMovieViewModel
                     updateCanCancel()
 
                     viewModelScope.launchIO {
-                        val result =
-                            seerrService.api.moviesApi.movieMovieIdRatingsGet(movieId = item.id)
-                        _state.update { it.copy(rating = DiscoverRating(result)) }
+                        val rating =
+                            getDiscoverRating(item.id) {
+                                DiscoverRating(
+                                    seerrService.api.moviesApi.movieMovieIdRatingsGet(movieId = item.id),
+                                )
+                            }
+                        _state.update { it.copy(rating = rating) }
                     }
                     if (state.value.similar.isEmpty()) {
                         viewModelScope.launchIO {
@@ -248,6 +259,15 @@ class DiscoverMovieViewModel
             navigationManager.navigateTo(destination)
         }
 
+        fun goTo(
+            mediaInfo: MediaInfo?,
+            type: BaseItemKind,
+        ) {
+            viewModelScope.launchDefault {
+                goToButtonDiscover(mediaInfo, type, context, navigationManager)
+            }
+        }
+
         fun request(request: MovieRequest) {
             viewModelScope.launchIO {
                 if (request.movieId == null) {
@@ -255,7 +275,7 @@ class DiscoverMovieViewModel
                     return@launchIO
                 }
                 try {
-                    seerrService.api.requestApi.requestPost(
+                    val postRequest =
                         RequestPostRequest(
                             is4k = request.is4k,
                             mediaId = request.movieId,
@@ -269,8 +289,9 @@ class DiscoverMovieViewModel
                             profileId = request.profileId,
                             rootFolder = request.folder,
                             tags = emptyList(),
-                        ),
-                    )
+                        )
+                    Timber.v("postRequest=%s", postRequest)
+                    seerrService.api.requestApi.requestPost(postRequest)
                 } catch (ex: CancellationException) {
                     throw ex
                 } catch (ex: Exception) {
@@ -330,7 +351,12 @@ fun canUserCancelRequest(
     (
         // User requested this
         user.hasPermission(SeerrPermission.REQUEST) &&
-            requests?.any { it.requestedBy?.id == user?.id } == true
+            requests
+                .orEmpty()
+                .any {
+                    equalsNotNull(it.requestedBy?.id, user?.id) &&
+                        RequestStatus.from(it.status) < RequestStatus.APPROVED
+                }
     )
 
 data class DiscoverMovieState(

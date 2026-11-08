@@ -1,5 +1,6 @@
 package com.github.damontecres.wholphin.ui.main.settings
 
+import androidx.activity.compose.BackHandler
 import androidx.annotation.StringRes
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -36,12 +37,13 @@ import com.github.damontecres.wholphin.preferences.UserPreferences
 import com.github.damontecres.wholphin.ui.components.BasicDialog
 import com.github.damontecres.wholphin.ui.components.ConfirmDialog
 import com.github.damontecres.wholphin.ui.data.RowColumn
-import com.github.damontecres.wholphin.ui.detail.search.SearchForDialog
+import com.github.damontecres.wholphin.ui.detail.possibleFavoriteTypes
 import com.github.damontecres.wholphin.ui.launchIO
 import com.github.damontecres.wholphin.ui.main.HomePageContent
 import com.github.damontecres.wholphin.ui.main.settings.HomeSettingsDestination.ChooseRowType
 import com.github.damontecres.wholphin.ui.main.settings.HomeSettingsDestination.RowSettings
 import com.github.damontecres.wholphin.ui.rememberPosition
+import com.github.damontecres.wholphin.ui.search.SearchForDialog
 import com.github.damontecres.wholphin.util.ExceptionHandler
 import com.github.damontecres.wholphin.util.HomeRowLoadingState
 import kotlinx.coroutines.Job
@@ -63,11 +65,14 @@ fun HomeSettingsPage(
     var showConfirmDialog by remember { mutableStateOf<ShowConfirm?>(null) }
     var searchForDialog by remember { mutableStateOf<BaseItemKind?>(null) }
     var showRemovedNextUpDialog by remember { mutableStateOf(false) }
+    var showSaveDialog by remember { mutableStateOf(false) }
 
     val state by viewModel.state.collectAsState()
+    val serverPluginActive by viewModel.serverPluginActive.collectAsState()
     var position by rememberPosition(0, 0)
     // TODO discover rows
     val discoverEnabled = false // by viewModel.discoverEnabled.collectAsState(false)
+    val settingsHaveChanged by viewModel.settingsChanged.collectAsState()
 
     // Adds a row, waits until its done loading, then scrolls to the new row
     fun addRow(
@@ -83,6 +88,10 @@ fun HomeSettingsPage(
                 listState.animateScrollToItem(state.rows.lastIndex)
             }
         }
+    }
+
+    BackHandler(settingsHaveChanged) {
+        showSaveDialog = true
     }
 
     Row(
@@ -136,6 +145,7 @@ fun HomeSettingsPage(
                                             position = RowColumn(index, 0)
                                         }
                                     },
+                                    onClickSourceSettings = { backStack.add(HomeSettingsDestination.SourceSettings) },
                                     modifier = destModifier,
                                 )
                             }
@@ -256,7 +266,10 @@ fun HomeSettingsPage(
                             }
 
                             HomeSettingsDestination.ChooseFavorite -> {
+                                val favoriteTypeOptions =
+                                    remember { state.libraries.possibleFavoriteTypes(true) }
                                 HomeSettingsFavoriteList(
+                                    favoriteTypeOptions = favoriteTypeOptions,
                                     onClick = { type ->
                                         addRow { viewModel.addFavoriteRow(type) }
                                     },
@@ -278,6 +291,16 @@ fun HomeSettingsPage(
                                         }
                                     },
                                     onClickResize = { viewModel.resizeCards(it) },
+                                    onClickViewNextUp = {
+                                        showRemovedNextUpDialog = true
+                                    },
+                                    modifier = destModifier,
+                                )
+                            }
+
+                            HomeSettingsDestination.SourceSettings -> {
+                                HomeSettingsSourcePage(
+                                    source = state.source,
                                     onClickSave = {
                                         showConfirmDialog =
                                             ShowConfirm(R.string.overwrite_server_settings) {
@@ -288,6 +311,13 @@ fun HomeSettingsPage(
                                         showConfirmDialog =
                                             ShowConfirm(R.string.overwrite_local_settings) {
                                                 viewModel.loadFromRemote()
+                                            }
+                                    },
+                                    serverPluginActive = serverPluginActive,
+                                    onClickLoadPlugin = {
+                                        showConfirmDialog =
+                                            ShowConfirm(R.string.overwrite_local_settings) {
+                                                viewModel.loadFromRemotePlugin()
                                             }
                                     },
                                     onClickLoadWeb = {
@@ -301,9 +331,6 @@ fun HomeSettingsPage(
                                             ShowConfirm(R.string.overwrite_local_settings) {
                                                 addRow(false) { viewModel.resetToDefault() }
                                             }
-                                    },
-                                    onClickViewNextUp = {
-                                        showRemovedNextUpDialog = true
                                     },
                                     modifier = destModifier,
                                 )
@@ -370,6 +397,29 @@ fun HomeSettingsPage(
                 modifier = Modifier.padding(16.dp),
             )
         }
+    }
+    if (showSaveDialog) {
+        SaveHomeSettingsDialog(
+            onDismissRequest = { showSaveDialog = false },
+            onSaveLocal = {
+                scope.launch {
+                    viewModel.saveToLocal().join()
+                    viewModel.navigationManager.goBack()
+                }
+            },
+            onSaveServer = {
+                scope.launch {
+                    viewModel.saveToRemote().join()
+                    viewModel.navigationManager.goBack()
+                }
+            },
+            onDiscard = {
+                scope.launch {
+                    viewModel.discardChanges().join()
+                    viewModel.navigationManager.goBack()
+                }
+            },
+        )
     }
 }
 

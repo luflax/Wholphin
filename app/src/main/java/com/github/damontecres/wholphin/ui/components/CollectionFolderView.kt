@@ -46,32 +46,37 @@ import com.github.damontecres.wholphin.services.BackdropService
 import com.github.damontecres.wholphin.services.FavoriteWatchManager
 import com.github.damontecres.wholphin.services.FilterOptionCache
 import com.github.damontecres.wholphin.services.MediaManagementService
-import com.github.damontecres.wholphin.services.MediaReportService
 import com.github.damontecres.wholphin.services.MusicService
 import com.github.damontecres.wholphin.services.NavigationManager
+import com.github.damontecres.wholphin.services.ServerReportService
 import com.github.damontecres.wholphin.services.StreamChoiceService
 import com.github.damontecres.wholphin.services.ThemeSongPlayer
 import com.github.damontecres.wholphin.services.UserPreferencesService
 import com.github.damontecres.wholphin.services.deleteItem
 import com.github.damontecres.wholphin.ui.SlimItemFields
+import com.github.damontecres.wholphin.ui.cards.GridCard
 import com.github.damontecres.wholphin.ui.data.SortAndDirection
+import com.github.damontecres.wholphin.ui.detail.GridItemDetails
 import com.github.damontecres.wholphin.ui.detail.music.addToQueue
 import com.github.damontecres.wholphin.ui.equalsNotNull
 import com.github.damontecres.wholphin.ui.launchDefault
 import com.github.damontecres.wholphin.ui.launchIO
 import com.github.damontecres.wholphin.ui.nav.Destination
+import com.github.damontecres.wholphin.ui.playback.scale
 import com.github.damontecres.wholphin.ui.rememberInt
 import com.github.damontecres.wholphin.ui.showToast
 import com.github.damontecres.wholphin.ui.toServerString
 import com.github.damontecres.wholphin.ui.tryRequestFocus
+import com.github.damontecres.wholphin.ui.util.goToRandom
 import com.github.damontecres.wholphin.util.ApiRequestPager
+import com.github.damontecres.wholphin.util.BlockingList
 import com.github.damontecres.wholphin.util.DataLoadingState
 import com.github.damontecres.wholphin.util.ExceptionHandler
+import com.github.damontecres.wholphin.util.GetAlbumArtistsHandler
 import com.github.damontecres.wholphin.util.GetArtistsHandler
 import com.github.damontecres.wholphin.util.GetItemsRequestHandler
 import com.github.damontecres.wholphin.util.GetPersonsHandler
 import com.github.damontecres.wholphin.util.LoadingState
-import com.github.damontecres.wholphin.util.RequestHandler
 import com.github.damontecres.wholphin.util.WholphinDispatchers
 import com.github.damontecres.wholphin.util.successValue
 import dagger.assisted.Assisted
@@ -79,6 +84,7 @@ import dagger.assisted.AssistedFactory
 import dagger.assisted.AssistedInject
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.catch
@@ -88,12 +94,14 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.jellyfin.sdk.api.client.ApiClient
+import org.jellyfin.sdk.api.client.extensions.libraryApi
 import org.jellyfin.sdk.api.client.extensions.userLibraryApi
 import org.jellyfin.sdk.model.api.BaseItemKind
 import org.jellyfin.sdk.model.api.CollectionType
 import org.jellyfin.sdk.model.api.ImageType
 import org.jellyfin.sdk.model.api.ItemSortBy
 import org.jellyfin.sdk.model.api.SortOrder
+import org.jellyfin.sdk.model.api.request.GetAlbumArtistsRequest
 import org.jellyfin.sdk.model.api.request.GetArtistsRequest
 import org.jellyfin.sdk.model.api.request.GetItemsRequest
 import org.jellyfin.sdk.model.api.request.GetPersonsRequest
@@ -119,7 +127,7 @@ class CollectionFolderViewModel
         private val mediaManagementService: MediaManagementService,
         private val musicService: MusicService,
         val streamChoiceService: StreamChoiceService,
-        val mediaReportService: MediaReportService,
+        val serverReportService: ServerReportService,
         private val filterOptionCache: FilterOptionCache,
         @Assisted val itemId: String,
         @Assisted initialSortAndDirection: SortAndDirection?,
@@ -128,7 +136,8 @@ class CollectionFolderViewModel
         @Assisted("useSeriesForPrimary") private val useSeriesForPrimary: Boolean,
         @Assisted defaultViewOptions: ViewOptions,
     ) : ViewModel(),
-        ContextMenuProvider {
+        ContextMenuProvider,
+        CollectionFolderViewActions {
         @AssistedFactory
         interface Factory {
             fun create(
@@ -143,6 +152,9 @@ class CollectionFolderViewModel
 
         private val _state = MutableStateFlow(CollectionFolderState(viewOptions = defaultViewOptions))
         val state: StateFlow<CollectionFolderState> = _state
+
+        private val artistSource: ArtistSource
+            get() = state.value.viewOptions.artistSource
 
         var position: Int
             get() = savedStateHandle.get<Int>("position") ?: 0
@@ -166,15 +178,25 @@ class CollectionFolderViewModel
                             val id = collectionFilter.libraryDisplayInfoIdOverride ?: itemId
                             libraryDisplayInfoDao.getItem(user, id)
                         }
+                    val ancestorDisplayInfo =
+                        if (libraryDisplayInfo?.viewOptions == null && item != null) {
+                            getAncestorDisplayInfo(item)
+                        } else {
+                            null
+                        }
                     _state.update {
                         it.copy(
-                            viewOptions = libraryDisplayInfo?.viewOptions ?: defaultViewOptions,
+                            viewOptions =
+                                libraryDisplayInfo?.viewOptions
+                                    ?: ancestorDisplayInfo?.viewOptions
+                                    ?: defaultViewOptions,
                         )
                     }
 
                     val sortAndDirection =
                         if (collectionFilter.useSavedLibraryDisplayInfo) {
                             libraryDisplayInfo?.sortAndDirection
+                                ?: ancestorDisplayInfo?.sortAndDirection
                         } else {
                             null
                         } ?: initialSortAndDirection ?: SortAndDirection.DEFAULT
@@ -230,6 +252,25 @@ class CollectionFolderViewModel
             }
         }
 
+        /**
+         * For a sub-folder, returns the saved display info of the closest ancestor that has one
+         */
+        private suspend fun getAncestorDisplayInfo(item: BaseItem): LibraryDisplayInfo? {
+            if (item.type != BaseItemKind.FOLDER || collectionFilter.libraryDisplayInfoIdOverride != null) {
+                return null
+            }
+            val user = serverRepository.currentUser ?: return null
+            return try {
+                api.libraryApi
+                    .getAncestors(item.id, user.id)
+                    .content
+                    .firstNotNullOfOrNull { ancestor -> libraryDisplayInfoDao.getItem(user, ancestor.id) }
+            } catch (ex: Exception) {
+                Timber.w(ex, "Error getting ancestors for %s", item.id)
+                null
+            }
+        }
+
         private fun saveLibraryDisplayInfo(
             newFilter: GetItemsFilter = state.value.filter,
             newSort: SortAndDirection = state.value.sortAndDirection,
@@ -253,9 +294,19 @@ class CollectionFolderViewModel
             }
         }
 
-        fun saveViewOptions(viewOptions: ViewOptions) {
+        override fun saveViewOptions(viewOptions: ViewOptions) {
             position = 0
+            val artistSourceChanged = viewOptions.artistSource != artistSource
             _state.update { it.copy(viewOptions = viewOptions) }
+            if (artistSourceChanged && state.value.filter.override == GetItemsFilterOverride.ARTIST) {
+                loadResults(
+                    true,
+                    state.value.sortAndDirection,
+                    recursive,
+                    state.value.filter,
+                    useSeriesForPrimary,
+                )
+            }
             viewModelScope.launch(ExceptionHandler() + WholphinDispatchers.IO) {
                 saveLibraryDisplayInfo(viewOptions = viewOptions)
                 if (!viewOptions.showBackdrop) {
@@ -264,7 +315,33 @@ class CollectionFolderViewModel
             }
         }
 
-        fun onFilterChange(
+        override fun onClickRandom() {
+            viewModelScope.launchIO {
+                try {
+                    val state = state.value
+                    val list = state.items.successValue as? BlockingList<BaseItem?>
+                    if (list != null) {
+                        goToRandom(
+                            navigateTo = ::navigateTo,
+                            parentId = itemId,
+                            filter = state.filter,
+                            sortAndDirection = state.sortAndDirection,
+                            recursive = recursive,
+                            list = list,
+                        )
+                    } else {
+                        Timber.w("state.value.items is not successful: %s", state.items)
+                    }
+                } catch (ex: CancellationException) {
+                    throw ex
+                } catch (ex: Exception) {
+                    Timber.e(ex, "Error getting random")
+                    showToast(context, "Error: ${ex.localizedMessage}}")
+                }
+            }
+        }
+
+        override fun onFilterChange(
             newFilter: GetItemsFilter,
             recursive: Boolean,
         ) {
@@ -279,7 +356,7 @@ class CollectionFolderViewModel
             )
         }
 
-        fun onSortChange(
+        override fun onSortChange(
             sortAndDirection: SortAndDirection,
             recursive: Boolean,
             filter: GetItemsFilter,
@@ -379,13 +456,27 @@ class CollectionFolderViewModel
                 }
 
                 GetItemsFilterOverride.ARTIST -> {
-                    ApiRequestPager(
-                        api,
-                        createGetArtistsRequest(filter),
-                        GetArtistsHandler,
-                        viewModelScope,
-                        useSeriesForPrimary = useSeriesForPrimary,
-                    )
+                    when (artistSource) {
+                        ArtistSource.ARTIST -> {
+                            ApiRequestPager(
+                                api,
+                                createGetArtistsRequest(filter),
+                                GetArtistsHandler,
+                                viewModelScope,
+                                useSeriesForPrimary = useSeriesForPrimary,
+                            )
+                        }
+
+                        ArtistSource.ALBUM_ARTIST -> {
+                            ApiRequestPager(
+                                api,
+                                createGetAlbumArtistsRequest(filter),
+                                GetAlbumArtistsHandler,
+                                viewModelScope,
+                                useSeriesForPrimary = useSeriesForPrimary,
+                            )
+                        }
+                    }
                 }
             }
 
@@ -399,6 +490,18 @@ class CollectionFolderViewModel
                 GetArtistsRequest(
                     parentId = item?.id,
                     enableImageTypes = listOf(ImageType.PRIMARY, ImageType.THUMB),
+                    fields = SlimItemFields,
+                ),
+            )
+        }
+
+        private fun createGetAlbumArtistsRequest(filter: GetItemsFilter): GetAlbumArtistsRequest {
+            val item = state.value.item.successValue
+            return filter.applyTo(
+                GetAlbumArtistsRequest(
+                    parentId = item?.id,
+                    enableImageTypes = listOf(ImageType.PRIMARY, ImageType.THUMB),
+                    fields = SlimItemFields,
                 ),
             )
         }
@@ -459,7 +562,7 @@ class CollectionFolderViewModel
             return request
         }
 
-        suspend fun getFilterOptionValues(filterOption: ItemFilterBy<*>): List<FilterValueOption> =
+        override suspend fun getFilterOptionValues(filterOption: ItemFilterBy<*>): List<FilterValueOption> =
             filterOptionCache.getFilterOptionValues(
                 itemId.toUUID(),
                 filterOption,
@@ -469,19 +572,42 @@ class CollectionFolderViewModel
          * The count must come from the same endpoint that [createPager] pages through, otherwise
          * the index refers to a different result set and lands past the end of the list.
          */
-        suspend fun positionOfLetter(letter: Char): Int? =
+        override suspend fun positionOfLetter(letter: Char): Int? =
             withContext(WholphinDispatchers.IO) {
                 val filter = state.value.filter
                 when (filter.override) {
                     GetItemsFilterOverride.ARTIST -> {
-                        GetArtistsHandler.countMatching(
-                            createGetArtistsRequest(filter).copy(
-                                enableImageTypes = null,
-                                nameLessThan = letter.toString(),
-                                limit = 0,
-                                enableTotalRecordCount = true,
-                            ),
-                        )
+                        when (artistSource) {
+                            ArtistSource.ARTIST -> {
+                                GetArtistsHandler.countMatching(
+                                    api = api,
+                                    request =
+                                        createGetArtistsRequest(filter).copy(
+                                            enableImageTypes = null,
+                                            fields = null,
+                                            nameLessThan = letter.toString(),
+                                            limit = 0,
+                                            enableTotalRecordCount = true,
+                                            enableUserData = false,
+                                        ),
+                                )
+                            }
+
+                            ArtistSource.ALBUM_ARTIST -> {
+                                GetAlbumArtistsHandler.countMatching(
+                                    api = api,
+                                    request =
+                                        createGetAlbumArtistsRequest(filter).copy(
+                                            enableImageTypes = null,
+                                            fields = null,
+                                            nameLessThan = letter.toString(),
+                                            limit = 0,
+                                            enableTotalRecordCount = true,
+                                            enableUserData = false,
+                                        ),
+                                )
+                            }
+                        }
                     }
 
                     // GetPersonsRequest has no nameLessThan or startIndex, so /Persons cannot be
@@ -492,29 +618,24 @@ class CollectionFolderViewModel
 
                     GetItemsFilterOverride.NONE -> {
                         GetItemsRequestHandler.countMatching(
-                            createGetItemsRequest(
-                                sortAndDirection = state.value.sortAndDirection,
-                                recursive = recursive,
-                                filter = filter,
-                            ).copy(
-                                enableImageTypes = null,
-                                fields = null,
-                                nameLessThan = letter.toString(),
-                                limit = 0,
-                                enableTotalRecordCount = true,
-                            ),
+                            api = api,
+                            request =
+                                createGetItemsRequest(
+                                    sortAndDirection = state.value.sortAndDirection,
+                                    recursive = recursive,
+                                    filter = filter,
+                                ).copy(
+                                    enableImageTypes = null,
+                                    fields = null,
+                                    nameLessThan = letter.toString(),
+                                    limit = 0,
+                                    enableTotalRecordCount = true,
+                                    enableUserData = false,
+                                ),
                         )
                     }
                 }
             }
-
-        /**
-         * [request] must ask for the count, ie `limit = 0` and `enableTotalRecordCount = true`
-         */
-        private suspend fun <T> RequestHandler<T>.countMatching(request: T): Int {
-            val result by execute(api, request)
-            return result.totalRecordCount
-        }
 
         override fun setWatched(
             position: Int,
@@ -542,7 +663,7 @@ class CollectionFolderViewModel
             }
         }
 
-        fun updateBackdrop(item: BaseItem) {
+        override fun updateBackdrop(item: BaseItem) {
             viewModelScope.launchIO {
                 backdropService.submit(item)
             }
@@ -589,7 +710,7 @@ class CollectionFolderViewModel
             index: Int,
         ) = addToQueue(api, musicService, item, index)
 
-        override fun sendReportFor(itemId: UUID) = mediaReportService.sendReportFor(itemId)
+        override fun sendReportFor(itemId: UUID) = serverReportService.sendMediaReportFor(itemId)
 
         override fun isAdministrator(): Boolean = serverRepository.currentUserDto?.policy?.isAdministrator == true
     }
@@ -715,13 +836,123 @@ fun CollectionFolderView(
         },
 ) {
     val state by viewModel.state.collectAsState()
-    var position by rememberInt(viewModel.position)
+    LifecycleResumeEffect(itemId) {
+        viewModel.onResumePage()
 
-    val contextMenu = rememberContextMenu(preferences, viewModel)
+        onPauseOrDispose {
+            viewModel.release()
+        }
+    }
+    CollectionFolderViewContent(
+        preferences = preferences,
+        state = state,
+        savedPosition = viewModel.position,
+        itemId = itemId,
+        initialFilter = initialFilter,
+        recursive = recursive,
+        actions = actions,
+        sortOptions = sortOptions,
+        playEnabled = playEnabled,
+        defaultViewOptions = defaultViewOptions,
+        viewActions = viewModel,
+        modifier = modifier,
+        provider = viewModel,
+        showTitle = showTitle,
+        positionCallback = { columns, index ->
+            viewModel.position = index
+            positionCallback?.invoke(columns, index)
+        },
+        filterOptions = filterOptions,
+        focusRequesterOnEmpty = focusRequesterOnEmpty,
+    )
+}
+
+interface CollectionFolderViewActions {
+    fun navigateTo(destination: Destination)
+
+    fun updateBackdrop(item: BaseItem)
+
+    fun onSortChange(
+        sortAndDirection: SortAndDirection,
+        recursive: Boolean,
+        filter: GetItemsFilter,
+    )
+
+    fun onFilterChange(
+        newFilter: GetItemsFilter,
+        recursive: Boolean,
+    )
+
+    suspend fun getFilterOptionValues(filterOption: ItemFilterBy<*>): List<FilterValueOption>
+
+    suspend fun positionOfLetter(letter: Char): Int?
+
+    fun saveViewOptions(viewOptions: ViewOptions)
+
+    /**
+     * Navigate to a random item
+     */
+    fun onClickRandom()
+}
+
+@Composable
+fun CollectionFolderViewContent(
+    preferences: UserPreferences,
+    state: CollectionFolderState,
+    savedPosition: Int,
+    itemId: String,
+    initialFilter: CollectionFolderFilter,
+    recursive: Boolean,
+    actions: GridClickActions,
+    sortOptions: List<ItemSortBy>,
+    playEnabled: Boolean,
+    defaultViewOptions: ViewOptions,
+    viewActions: CollectionFolderViewActions,
+    modifier: Modifier = Modifier,
+    provider: ContextMenuProvider,
+    showTitle: Boolean = true,
+    positionCallback: ((columns: Int, position: Int) -> Unit)? = null,
+    filterOptions: List<ItemFilterBy<*>> = DefaultFilterOptions,
+    focusRequesterOnEmpty: FocusRequester? = null,
+    gridCardContent: @Composable CollectionFolderViewScope.(
+        GridItemDetails<BaseItem>,
+    ) -> Unit = { (item, index, onClick, onLongClick, widthPx, mod) ->
+        GridCard(
+            item = item,
+            onClick = onClick,
+            onLongClick = onLongClick,
+            imageContentScale = viewOptions.contentScale.scale,
+            imageAspectRatio = viewOptions.aspectRatio.ratio,
+            imageType = viewOptions.imageType,
+            showTitle = viewOptions.showTitles,
+            fillWidth = widthPx,
+            modifier = mod,
+        )
+    },
+    listItemContent: @Composable CollectionFolderViewScope.(
+        GridItemDetails<BaseItem>,
+    ) -> Unit = { (item, index, onClick, onLongClick, _, mod) ->
+        CollectionFolderListItem(
+            item = item,
+            dense = viewOptions.type == ViewOptionsType.DENSE_LIST,
+            collectionType = collectionType,
+            onClick = onClick,
+            onLongClick = onLongClick,
+            modifier = mod,
+        )
+    },
+) {
+    var position by rememberInt(savedPosition)
+
+    // Track if leaving page due to clicking the random button so focus can be restored there
+    var clickedRandom by rememberSaveable { mutableStateOf(false) }
+
+    val contextMenu = rememberContextMenu(preferences, provider)
     var showViewOptions by rememberSaveable { mutableStateOf(false) }
     var filterDropdownShowing by remember { mutableStateOf(false) }
     val headerRowFocusRequester = remember { FocusRequester() }
     val filterButtonFocusRequester = remember { FocusRequester() }
+    val randomButtonFocusRequester = remember { FocusRequester() }
 
     val gridActions =
         remember(actions) {
@@ -761,7 +992,7 @@ fun CollectionFolderView(
                                         filter = state.filter,
                                     )
                                 }
-                            viewModel.navigateTo(destination)
+                            viewActions.navigateTo(destination)
                         }
                         Unit
                     },
@@ -780,7 +1011,7 @@ fun CollectionFolderView(
                             } else {
                                 Destination.Playback(item)
                             }
-                        viewModel.navigateTo(destination)
+                        viewActions.navigateTo(destination)
                     },
             )
         }
@@ -804,13 +1035,6 @@ fun CollectionFolderView(
                         ?: item?.data?.collectionType?.name
                         ?: stringResource(R.string.collection)
                 Column(modifier = Modifier.fillMaxSize()) {
-                    LifecycleResumeEffect(itemId) {
-                        viewModel.onResumePage()
-
-                        onPauseOrDispose {
-                            viewModel.release()
-                        }
-                    }
                     var showHeader by rememberSaveable { mutableStateOf(true) }
                     val gridFocusRequester = remember { FocusRequester() }
                     val pager = remember(state.items) { state.items.successValue }
@@ -818,32 +1042,38 @@ fun CollectionFolderView(
                     val focusedItem = pager?.getOrNull(position)
                     if (state.viewOptions.showBackdrop) {
                         LaunchedEffect(focusedItem) {
-                            focusedItem?.let(viewModel::updateBackdrop)
+                            focusedItem?.let(viewActions::updateBackdrop)
                         }
                     }
                     CollectionFolderHeader(
+                        listIsNotEmpty = state.items.successValue?.isNotEmpty() == true,
                         showHeader = showHeader || state.items !is DataLoadingState.Success,
                         showTitle = showTitle,
-                        playEnabled = playEnabled && state.items.successValue?.isNotEmpty() == true,
+                        playEnabled = playEnabled,
                         title = title,
                         sortAndDirection = state.sortAndDirection,
                         onSortChange = {
-                            viewModel.onSortChange(it, recursive, state.filter)
+                            viewActions.onSortChange(it, recursive, state.filter)
                         },
                         sortOptions = sortOptions,
                         currentFilter = state.filter,
                         onFilterChange = {
-                            viewModel.onFilterChange(it, recursive)
+                            viewActions.onFilterChange(it, recursive)
                         },
                         getPossibleFilterValues = {
-                            viewModel.getFilterOptionValues(it)
+                            viewActions.getFilterOptionValues(it)
                         },
                         filterOptions = filterOptions,
                         onClickPlayAll = gridActions.onClickPlayAll!!,
                         onClickShowViewOptions = { showViewOptions = true },
+                        onClickRandom = {
+                            clickedRandom = true
+                            viewActions.onClickRandom()
+                        },
                         modifier = Modifier.focusRequester(headerRowFocusRequester),
                         onShowFilterDropdown = { filterDropdownShowing = it },
                         filterButtonFocusRequester = filterButtonFocusRequester,
+                        randomButtonFocusRequester = randomButtonFocusRequester,
                     )
 
                     when (val pager = state.items) {
@@ -866,17 +1096,30 @@ fun CollectionFolderView(
                                     when {
                                         contextMenu.isShowing -> null
                                         filterDropdownShowing -> filterButtonFocusRequester
+                                        clickedRandom -> randomButtonFocusRequester
                                         pager.data.isNotEmpty() -> gridFocusRequester
                                         else -> focusRequesterOnEmpty ?: headerRowFocusRequester
                                     }
                                 focusRequester?.tryRequestFocus()
+                                clickedRandom = false
                             }
+                            val scope =
+                                object : CollectionFolderViewScope {
+                                    override val viewOptions: ViewOptions
+                                        get() = state.viewOptions
+                                    override val collectionType: CollectionType?
+                                        get() = item?.data?.collectionType
+                                    override val sortAndDirection: SortAndDirection
+                                        get() = state.sortAndDirection
+                                    override val collectionSize: Int
+                                        get() = pager.data.size
+                                }
+
                             Box(Modifier.fillMaxSize()) {
                                 if (state.viewOptions.type == ViewOptionsType.GRID) {
-                                    CollectionFolderGrid(
+                                    scope.CollectionFolderGrid(
                                         preferences = preferences,
-                                        collectionType = item?.data?.collectionType,
-                                        initialPosition = viewModel.position,
+                                        initialPosition = savedPosition,
                                         items = pager.data,
                                         sortAndDirection = state.sortAndDirection,
                                         modifier = Modifier.fillMaxSize(),
@@ -884,21 +1127,20 @@ fun CollectionFolderView(
                                         onClickItem = gridActions.onClickItem,
                                         onLongClickItem = gridActions.onLongClickItem!!,
                                         positionCallback = { columns, pos ->
-                                            viewModel.position = pos
                                             showHeader = pos < columns
                                             position = pos
                                             positionCallback?.invoke(columns, pos)
                                         },
-                                        letterPosition = { viewModel.positionOfLetter(it) ?: -1 },
-                                        viewOptions = state.viewOptions,
+                                        letterPosition = { viewActions.positionOfLetter(it) ?: -1 },
                                         onClickPlay = gridActions.onClickPlayRemoteButton!!,
                                         focusedItem = focusedItem,
+                                        cardContent = gridCardContent,
                                     )
                                 } else {
-                                    CollectionFolderList(
+                                    scope.CollectionFolderList(
                                         preferences = preferences,
                                         collectionType = item?.data?.collectionType,
-                                        initialPosition = viewModel.position,
+                                        initialPosition = savedPosition,
                                         items = pager.data,
                                         sortAndDirection = state.sortAndDirection,
                                         modifier = Modifier.fillMaxSize(),
@@ -906,15 +1148,14 @@ fun CollectionFolderView(
                                         onClickItem = gridActions.onClickItem,
                                         onLongClickItem = gridActions.onLongClickItem!!,
                                         positionCallback = { columns, pos ->
-                                            viewModel.position = pos
                                             showHeader = pos < columns
                                             position = pos
                                             positionCallback?.invoke(columns, pos)
                                         },
-                                        letterPosition = { viewModel.positionOfLetter(it) ?: -1 },
-                                        viewOptions = state.viewOptions,
+                                        letterPosition = { viewActions.positionOfLetter(it) ?: -1 },
                                         onClickPlay = gridActions.onClickPlayRemoteButton!!,
                                         focusedItem = focusedItem,
+                                        itemContent = listItemContent,
                                     )
                                 }
                                 androidx.compose.animation.AnimatedVisibility(
@@ -945,11 +1186,22 @@ fun CollectionFolderView(
         ViewOptionsDialog(
             viewOptions = state.viewOptions,
             defaultViewOptions = defaultViewOptions,
+            showArtistSource = state.filter.override == GetItemsFilterOverride.ARTIST,
             onDismissRequest = {
                 showViewOptions = false
-                viewModel.saveViewOptions(state.viewOptions)
+                viewActions.saveViewOptions(state.viewOptions)
             },
-            onViewOptionsChange = viewModel::saveViewOptions,
+            onViewOptionsChange = viewActions::saveViewOptions,
         )
     }
+}
+
+/**
+ * Scope with global data for [CollectionFolderView], [CollectionFolderGrid], [CollectionFolderList], and individual items
+ */
+interface CollectionFolderViewScope {
+    val viewOptions: ViewOptions
+    val collectionType: CollectionType?
+    val sortAndDirection: SortAndDirection
+    val collectionSize: Int
 }

@@ -1,7 +1,9 @@
 package com.github.damontecres.wholphin.ui.setup
 
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.github.damontecres.wholphin.R
 import com.github.damontecres.wholphin.WholphinApplication
 import com.github.damontecres.wholphin.data.JellyfinServerDao
 import com.github.damontecres.wholphin.data.ServerRepository
@@ -19,6 +21,7 @@ import dagger.assisted.Assisted
 import dagger.assisted.AssistedFactory
 import dagger.assisted.AssistedInject
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
@@ -46,6 +49,7 @@ import kotlin.time.Duration.Companion.seconds
 class SwitchUserViewModel
     @AssistedInject
     constructor(
+        @param:ApplicationContext private val context: Context,
         val jellyfin: Jellyfin,
         val serverRepository: ServerRepository,
         val serverDao: JellyfinServerDao,
@@ -124,21 +128,39 @@ class SwitchUserViewModel
             }
         }
 
-        fun trySwitchUser(user: JellyfinUser): Deferred<String?> =
+        fun trySwitchUser(user: JellyfinUser): Deferred<SwitchUserResult> =
             viewModelScope.async(WholphinDispatchers.IO) {
                 try {
                     val current = serverRepository.changeUser(server, user)
+                    navigationManager.reloadHome()
                     setupNavigationManager.navigateTo(SetupDestination.AppContent(current))
-                    null
+                    SwitchUserResult.Success
                 } catch (ex: InvalidStatusException) {
-                    if (ex.status == 401) {
-                        "Credentials expired, please login in again"
-                    } else {
-                        ex.localizedMessage
+                    when (ex.status) {
+                        401 -> {
+                            Timber.w(ex, "Error switching user 401")
+                            SwitchUserResult.Error(
+                                context.getString(R.string.login_credentials_expired),
+                                true,
+                            )
+                        }
+
+                        403 -> {
+                            Timber.w(ex, "Error switching user 403")
+                            SwitchUserResult.Error(
+                                context.getString(R.string.login_not_authorized),
+                                false,
+                            )
+                        }
+
+                        else -> {
+                            Timber.e(ex, "Error switching user")
+                            SwitchUserResult.Error(ex.localizedMessage, true)
+                        }
                     }
                 } catch (ex: Exception) {
                     Timber.e(ex, "Error switching user")
-                    ex.localizedMessage
+                    SwitchUserResult.Error(ex.localizedMessage, true)
                 }
             }
 
@@ -278,16 +300,18 @@ class SwitchUserViewModel
                 knownUsers + publicUsers
             }
 
-        private suspend fun checkServerVersion(): Pair<String?, ServerVersionSupported> {
+        private suspend fun checkServerVersion(): Pair<ServerVersion?, ServerVersionSupported> {
             val api = jellyfin.createApi(server.url)
             val systemInfo by api.systemApi.getPublicSystemInfo()
             val serverVersion = systemInfo.version?.let { ServerVersion.fromString(it) }
             return if (serverVersion == null) {
-                systemInfo.version to ServerVersionSupported.UNKNOWN
+                serverVersion to ServerVersionSupported.UNKNOWN
             } else if (serverVersion < WholphinApplication.minimumServerVersion) {
-                systemInfo.version to ServerVersionSupported.NOT_SUPPORTED
+                serverVersion to ServerVersionSupported.NOT_SUPPORTED
+            } else if (serverVersion < WholphinApplication.newMinimumServerVersion) {
+                serverVersion to ServerVersionSupported.NOT_SUPPORTED_IN_FUTURE
             } else {
-                systemInfo.version to ServerVersionSupported.SUPPORTED
+                serverVersion to ServerVersionSupported.SUPPORTED
             }
         }
 
@@ -319,6 +343,18 @@ data class SwitchUserState(
     // LoadingState for while adding/switching users
     val switchUserState: LoadingState = LoadingState.Pending,
     val loginAttempts: Int = 0,
-    val serverVersion: String? = null,
+    val serverVersion: ServerVersion? = null,
     val serverVersionSupported: ServerVersionSupported = ServerVersionSupported.UNKNOWN,
 )
+
+/**
+ * Result of trying to switch users via [SwitchUserViewModel.trySwitchUser]
+ */
+sealed interface SwitchUserResult {
+    data object Success : SwitchUserResult
+
+    data class Error(
+        val errorMessage: String?,
+        val showLogin: Boolean,
+    ) : SwitchUserResult
+}

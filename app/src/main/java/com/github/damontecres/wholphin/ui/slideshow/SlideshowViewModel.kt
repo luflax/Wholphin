@@ -6,6 +6,9 @@ import androidx.compose.runtime.Stable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.Player
+import coil3.imageLoader
+import coil3.request.ImageRequest
+import coil3.size.Size
 import com.github.damontecres.wholphin.data.ChosenStreams
 import com.github.damontecres.wholphin.data.PlaybackEffectDao
 import com.github.damontecres.wholphin.data.ServerRepository
@@ -17,6 +20,8 @@ import com.github.damontecres.wholphin.preferences.PlayerBackend
 import com.github.damontecres.wholphin.services.ImageUrlService
 import com.github.damontecres.wholphin.services.PlayerFactory
 import com.github.damontecres.wholphin.services.ScreensaverService
+import com.github.damontecres.wholphin.services.StreamChoiceReason
+import com.github.damontecres.wholphin.services.StreamChoiceResult
 import com.github.damontecres.wholphin.services.UserPreferencesService
 import com.github.damontecres.wholphin.ui.PhotoItemFields
 import com.github.damontecres.wholphin.ui.launchIO
@@ -138,13 +143,16 @@ class SlideshowViewModel
                             ),
                         )
                     serverRepository.currentUser?.let { user ->
+
                         val filter =
-                            playbackEffectDao
-                                .getPlaybackEffect(
-                                    user.rowId,
-                                    slideshowSettings.parentId,
-                                    BaseItemKind.PHOTO_ALBUM,
-                                )?.videoFilter
+                            slideshowSettings.parentId?.let {
+                                playbackEffectDao
+                                    .getPlaybackEffect(
+                                        user.rowId,
+                                        slideshowSettings.parentId,
+                                        BaseItemKind.PHOTO_ALBUM,
+                                    )?.videoFilter
+                            }
                         if (filter != null) {
                             Timber.v("Got filter for album %s", slideshowSettings.parentId)
                             albumImageFilter = filter
@@ -172,7 +180,7 @@ class SlideshowViewModel
             val size = state.value.items.size
             val newPosition = state.value.position + 1
             return if (newPosition < size) {
-                updatePosition(newPosition)
+                updatePosition(newPosition, true)
                 true
             } else {
                 false
@@ -182,14 +190,23 @@ class SlideshowViewModel
         fun previousImage(): Boolean {
             val newPosition = state.value.position - 1
             return if (newPosition >= 0) {
-                updatePosition(newPosition)
+                updatePosition(newPosition, false)
                 true
             } else {
                 false
             }
         }
 
-        fun updatePosition(position: Int): Job? =
+        /**
+         * Update image state to the specified position
+         *
+         * @param position the index to use
+         * @param isNext whether moving to the next or previous image for prefetching purposes
+         */
+        fun updatePosition(
+            position: Int,
+            isNext: Boolean = true,
+        ): Job? =
             (state.value.items as? ApiRequestPager<*>)?.let { pager ->
                 viewModelScope.launchIO {
                     try {
@@ -217,12 +234,21 @@ class SlideshowViewModel
                                             source.mediaStreams?.firstOrNull { it.type == MediaStreamType.AUDIO }
                                         ChosenStreams(
                                             itemPlayback = null,
-                                            plc = null,
+                                            audioStc = emptyList(),
+                                            subtitleStc = emptyList(),
                                             itemId = image.id,
                                             source = source,
                                             videoStream = video,
-                                            audioStream = audio,
-                                            subtitleStream = null,
+                                            audioStream =
+                                                StreamChoiceResult(
+                                                    audio,
+                                                    StreamChoiceReason.Unknown,
+                                                ),
+                                            subtitleStream =
+                                                StreamChoiceResult(
+                                                    null,
+                                                    StreamChoiceReason.Unknown,
+                                                ),
                                             subtitlesDisabled = false,
                                         )
                                     }
@@ -286,6 +312,31 @@ class SlideshowViewModel
                             )
                         }
                     }
+                    try {
+                        // If there is a next/previous image, fetch it into the image cache
+                        val nextIndex = position + if (isNext) 1 else -1
+                        if (nextIndex in pager.indices) {
+                            pager.getBlocking(nextIndex)?.let { nextImage ->
+                                if (nextImage.data.mediaType == MediaType.PHOTO) {
+                                    val url = api.libraryApi.getDownloadUrl(nextImage.id)
+                                    val request =
+                                        ImageRequest
+                                            .Builder(context)
+                                            .data(url)
+                                            .size(Size.ORIGINAL)
+                                            .build()
+                                    context.imageLoader.enqueue(request)
+                                    Timber.v(
+                                        "Prefetching index=%s, id=%s",
+                                        nextIndex,
+                                        nextImage.id,
+                                    )
+                                }
+                            }
+                        }
+                    } catch (ex: Exception) {
+                        Timber.e(ex, "Error preloading image")
+                    }
                 }
             }
 
@@ -339,7 +390,7 @@ class SlideshowViewModel
         fun pulseSlideshow() = pulseSlideshow(slideshowDelay)
 
         fun pulseSlideshow(milliseconds: Long) {
-            Timber.v("pulseSlideshow $milliseconds")
+//            Timber.v("pulseSlideshow $milliseconds")
             slideshowJob?.cancel()
             slideshowJob =
                 viewModelScope
@@ -393,7 +444,7 @@ class SlideshowViewModel
         fun saveGalleryFilter() {
             viewModelScope.launchIO(ExceptionHandler(autoToast = true)) {
                 val vf = _imageFilter.value
-                if (vf != null) {
+                if (slideshowSettings.parentId != null) {
                     albumImageFilter = vf
                     serverRepository.currentUser?.let { user ->
                         playbackEffectDao

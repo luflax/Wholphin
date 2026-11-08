@@ -65,14 +65,16 @@ kotlin {
     }
 }
 
+private fun Provider<String>.getInt() = get().toInt()
+
 configure<ApplicationExtension> {
     namespace = "com.github.damontecres.wholphin"
-    compileSdk = 36
+    compileSdk = libs.versions.compileSdk.getInt()
 
     defaultConfig {
         applicationId = "com.github.damontecres.wholphin"
-        minSdk = 23
-        targetSdk = 36
+        minSdk = libs.versions.minSdk.getInt()
+        targetSdk = libs.versions.targetSdk.getInt()
         versionCode = gitTags.trim().lines().size
         versionName = gitDescribe.trim().removePrefix("v").ifBlank { "0.0.0" }
         testInstrumentationRunner = "com.github.damontecres.wholphin.test.WholphinTestRunner"
@@ -179,7 +181,7 @@ configure<ApplicationExtension> {
             isEnable = !isBuildingBundle.get()
 
             reset()
-            include("armeabi-v7a", "arm64-v8a")
+            include("armeabi-v7a", "arm64-v8a", "x86_64")
             isUniversalApk = true
         }
     }
@@ -304,6 +306,7 @@ dependencies {
     implementation(libs.androidx.tvprovider)
     implementation(libs.androidx.work.runtime.ktx)
     implementation(libs.androidx.hilt.work)
+    implementation(libs.androidx.profileinstaller)
 
     implementation(libs.androidx.media3.exoplayer)
     implementation(libs.androidx.media3.session)
@@ -313,6 +316,7 @@ dependencies {
     implementation(libs.androidx.media3.ui)
     implementation(libs.androidx.media3.ui.compose)
     implementation(libs.ass.media)
+    implementation(libs.exoplayerhdrutils)
 
     implementation(libs.coil.core)
     implementation(libs.coil.compose)

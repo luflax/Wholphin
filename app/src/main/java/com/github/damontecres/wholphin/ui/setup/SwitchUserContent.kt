@@ -31,7 +31,6 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
@@ -50,6 +49,7 @@ import com.github.damontecres.wholphin.ui.components.TextButton
 import com.github.damontecres.wholphin.ui.dimAndBlur
 import com.github.damontecres.wholphin.ui.isNotNullOrBlank
 import com.github.damontecres.wholphin.ui.nav.Destination
+import com.github.damontecres.wholphin.ui.serverSupportedMessage
 import com.github.damontecres.wholphin.ui.tryRequestFocus
 import com.github.damontecres.wholphin.util.LoadingState
 import kotlinx.coroutines.launch
@@ -84,6 +84,24 @@ fun SwitchUserContent(
     fun hideAddUserDialog() {
         addUser = null
         showAddUser = false
+    }
+
+    fun trySwitchUser(user: JellyfinUser) {
+        val result = viewModel.trySwitchUser(user)
+        scope.launch {
+            when (val r = result.await()) {
+                is SwitchUserResult.Error -> {
+                    Toast.makeText(context, r.errorMessage, Toast.LENGTH_LONG).show()
+                    if (r.showLogin) {
+                        showAddUserDialog(user)
+                    }
+                }
+
+                SwitchUserResult.Success -> {
+                    // no-op, view model will navigate
+                }
+            }
+        }
     }
 
     LaunchedEffect(state.switchUserState) {
@@ -148,13 +166,7 @@ fun SwitchUserContent(
                             } else if (user.hasPin) {
                                 switchUserWithPin = user
                             } else {
-                                val result = viewModel.trySwitchUser(user)
-                                scope.launch {
-                                    result.await()?.let {
-                                        Toast.makeText(context, it, Toast.LENGTH_LONG).show()
-                                        showAddUserDialog(user)
-                                    }
-                                }
+                                trySwitchUser(user)
                             }
                         },
                         onAddUser = {
@@ -171,37 +183,15 @@ fun SwitchUserContent(
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
-                when (state.serverVersionSupported) {
-                    ServerVersionSupported.SUPPORTED -> {}
-
-                    ServerVersionSupported.NOT_SUPPORTED,
-                    ServerVersionSupported.UNKNOWN,
-                    -> {
-                        val resources = LocalResources.current
-                        val message =
-                            remember(resources) {
-                                if (state.serverVersion.isNotNullOrBlank()) {
-                                    resources.getString(R.string.server_version_not_supported) + ": ${state.serverVersion}"
-                                } else {
-                                    resources.getString(R.string.server_version_not_supported) + ": " +
-                                        resources.getString(R.string.unknown)
-                                }
-                            }
-                        Text(
-                            text = message,
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodyMedium,
-                            textAlign = TextAlign.Center,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier =
-                                Modifier
-                                    .fillMaxWidth()
-                                    .padding(start = 32.dp, end = 32.dp, bottom = 32.dp)
-                                    .align(Alignment.BottomCenter),
+                val resources = LocalResources.current
+                val message =
+                    remember(resources, state.serverVersionSupported) {
+                        resources.serverSupportedMessage(
+                            state.serverVersionSupported,
+                            state.serverVersion,
                         )
                     }
-                }
+                SwitchErrorMessage(message)
             }
         }
     }
@@ -396,14 +386,7 @@ fun SwitchUserContent(
             },
             onTextChange = {
                 if (it == user.pin) {
-                    val result = viewModel.trySwitchUser(user)
-                    scope.launch {
-                        result.await()?.let {
-                            Toast.makeText(context, it, Toast.LENGTH_LONG).show()
-                            showAddUserDialog(user)
-                            switchUserWithPin = null
-                        }
-                    }
+                    trySwitchUser(user)
                 }
             },
         )

@@ -22,6 +22,7 @@ import org.jellyfin.sdk.api.client.extensions.tvShowsApi
 import org.jellyfin.sdk.api.client.extensions.userLibraryApi
 import org.jellyfin.sdk.model.api.BaseItemDtoQueryResult
 import org.jellyfin.sdk.model.api.GetProgramsDto
+import org.jellyfin.sdk.model.api.request.GetAlbumArtistsRequest
 import org.jellyfin.sdk.model.api.request.GetArtistsRequest
 import org.jellyfin.sdk.model.api.request.GetEpisodesRequest
 import org.jellyfin.sdk.model.api.request.GetGenresRequest
@@ -131,6 +132,19 @@ sealed interface RequestHandler<T> {
         api: ApiClient,
         request: T,
     ): Response<BaseItemDtoQueryResult>
+
+    /**
+     * Count the total number of possible results for the request.
+     *
+     * [request] should be efficient and use `limit = 0` and `enableTotalRecordCount = true`
+     */
+    suspend fun countMatching(
+        api: ApiClient,
+        request: T,
+    ): Int {
+        val result by execute(api, request)
+        return result.totalRecordCount
+    }
 }
 
 @Serializable
@@ -388,6 +402,25 @@ object GetArtistsHandler : RequestHandler<GetArtistsRequest> {
     ): Response<BaseItemDtoQueryResult> = api.artistsApi.getArtists((request))
 }
 
+@Serializable
+object GetAlbumArtistsHandler : RequestHandler<GetAlbumArtistsRequest> {
+    override fun prepare(
+        request: GetAlbumArtistsRequest,
+        startIndex: Int,
+        limit: Int,
+        enableTotalRecordCount: Boolean,
+    ): GetAlbumArtistsRequest =
+        request.copy(
+            startIndex = startIndex,
+            limit = limit,
+        )
+
+    override suspend fun execute(
+        api: ApiClient,
+        request: GetAlbumArtistsRequest,
+    ): Response<BaseItemDtoQueryResult> = api.artistsApi.getAlbumArtists(request)
+}
+
 val requestSerializersModule =
     SerializersModule {
         polymorphic(Any::class) {
@@ -403,6 +436,7 @@ val requestSerializersModule =
             subclass(GetStudiosRequest::class)
             subclass(GetRecordingsRequest::class)
             subclass(GetLiveTvChannelsRequest::class)
-            subclass(GetArtistsHandler::class)
+            subclass(GetArtistsRequest::class)
+            subclass(GetAlbumArtistsRequest::class)
         }
     }

@@ -2,11 +2,14 @@ package com.github.damontecres.wholphin.services
 
 import android.content.Context
 import android.os.Build
+import com.github.damontecres.wholphin.BuildConfig
 import com.github.damontecres.wholphin.data.ServerRepository
 import com.github.damontecres.wholphin.services.hilt.IoCoroutineScope
+import com.github.damontecres.wholphin.ui.detail.DebugViewModel.Companion.getLogCatLines
 import com.github.damontecres.wholphin.ui.launchIO
 import com.github.damontecres.wholphin.ui.showToast
 import com.github.damontecres.wholphin.util.ExceptionHandler
+import com.google.protobuf.MessageLiteOrBuilder
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.serialization.json.Json
@@ -22,10 +25,10 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Send media info to the server
+ * Send reports to the server such as media info or app logs
  */
 @Singleton
-class MediaReportService
+class ServerReportService
     @Inject
     constructor(
         @param:ApplicationContext private val context: Context,
@@ -45,17 +48,17 @@ class MediaReportService
         /**
          * Fetch the media info and send it to the server
          */
-        fun sendReportFor(itemId: UUID) {
+        fun sendMediaReportFor(itemId: UUID) {
             ioScope.launchIO(ExceptionHandler(autoToast = true)) {
                 val item = api.userLibraryApi.getItem(itemId = itemId).content
-                sendReportFor(item)
+                sendMediaReportFor(item)
             }
         }
 
         /**
          * Send the media report for the given item
          */
-        suspend fun sendReportFor(item: BaseItemDto) {
+        suspend fun sendMediaReportFor(item: BaseItemDto) {
             val sources =
                 item.mediaSources ?: api.userLibraryApi
                     .getItem(itemId = item.id)
@@ -67,30 +70,43 @@ class MediaReportService
                 deviceProfileService.getOrCreateDeviceProfile(appPreferences, serverVersion)
             val deviceProfileJson = json.encodeToString(deviceProfile)
             val body =
-                """
-                Send media info
+                buildLogHeader("Send media info") + "\n\n" +
+                    """
+                    playbackPrefs=${appPreferences.playbackPreferences.toStringOneLine()}
+
+                    experimental=${appPreferences.experimentalPreferences.toStringOneLine()}
+
+                    mediaSources=$sourcesJson
+
+                    deviceProfile=$deviceProfileJson
+                    """.trimIndent()
+            body.chunked(2048).forEach { Timber.w(it) }
+            Timber.w("End send media info")
+            val response by api.clientLogApi.logFile(body)
+            showToast(context, "Sent! Filename=${response.fileName}")
+        }
+
+        fun buildLogHeader(title: String): String {
+            val serverVersion = serverRepository.currentServer?.serverVersion
+            return """
+                $title
                 serverVersion=$serverVersion
                 clientInfo=$clientInfo
+                flavor=${BuildConfig.FLAVOR}
                 deviceInfo=$deviceInfo
                 manufacturer=${Build.MANUFACTURER}
                 model=${Build.MODEL}
                 apiLevel=${Build.VERSION.SDK_INT}
-
-                playbackPrefs=${
-                    appPreferences.playbackPreferences.toString().replace("\n", ", ")
-                        .replace("\t", " ")
-                }
-                experimental=${
-                    appPreferences.experimentalPreferences.toString().replace("\n", ", ")
-                        .replace("\t", " ")
-                }
-
-                deviceProfile=$deviceProfileJson
-
-                mediaSources=$sourcesJson
                 """.trimIndent()
-            Timber.w(body)
-            val response by api.clientLogApi.logFile(body)
+        }
+
+        suspend fun sendAppLogs() {
+            val logcat = getLogCatLines().joinToString("\n") { it.text }
+            val header = buildLogHeader("Send App Logs")
+            Timber.w(header)
+            val response by api.clientLogApi.logFile(header + "\n\n" + logcat)
             showToast(context, "Sent! Filename=${response.fileName}")
         }
     }
+
+private fun MessageLiteOrBuilder.toStringOneLine(): String = toString().replace("\n", ", ").replace("\t", " ")

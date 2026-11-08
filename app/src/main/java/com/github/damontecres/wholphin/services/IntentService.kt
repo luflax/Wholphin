@@ -2,6 +2,8 @@ package com.github.damontecres.wholphin.services
 
 import android.app.SearchManager
 import android.content.Intent
+import androidx.annotation.VisibleForTesting
+import com.github.damontecres.wholphin.data.RestoredSession
 import com.github.damontecres.wholphin.data.ServerRepository
 import com.github.damontecres.wholphin.data.model.BaseItem
 import com.github.damontecres.wholphin.ui.detail.series.SeasonEpisodeIds
@@ -27,82 +29,129 @@ class IntentService
             Timber.v("Parsing intent %s", intent)
             Timber.v("Intent extras: %s", intent.extras)
             Timber.v("Intent data: %s", intent.data)
-            if (intent.getStringParam("type") != null) {
-                return getDestinationFromChannel(intent)?.let { IntentResult.Target(it) }
-                    ?: IntentResult.Error("Invalid parameters")
-            }
             val action = intent.action ?: intent.data?.host
-            if (action == Intent.ACTION_MAIN || action.isNullOrBlank()) {
+            if (
+                intent.getStringParam(INTENT_ITEM_TYPE) == null &&
+                (action == Intent.ACTION_MAIN || action.isNullOrBlank())
+            ) {
+                // Normal app launch
                 return IntentResult.NoOp
             }
 
-            val userId = intent.getStringParam("userId")?.toUUIDOrNull()
-            val serverId = intent.getStringParam("serverId")?.toUUIDOrNull()
-            if (userId != null && serverId != null) {
-                Timber.v("Intent switches user")
-                val user =
-                    serverRepository.serverDao.getUser(serverId, userId)
-                        ?: return IntentResult.Error("User not found")
-                if (!user.isProtected) {
-                    serverRepository.restoreSession(serverId, userId)
-                } else {
-                    return IntentResult.Error("Cannot switch to specified user")
-                }
-            } else if (serverRepository.currentUser == null) {
-                Timber.v("No current user, so restoring last")
-                val appPrefs = userPreferencesService.flow.first().appPreferences
-                if (appPrefs.signInAutomatically) {
-                    val userId = appPrefs.currentUserId.toUUIDOrNull()
-                    val serverId = appPrefs.currentServerId.toUUIDOrNull()
-                    if (userId != null && serverId != null) {
-                        serverRepository.restoreSession(serverId, userId)
-                            ?: return IntentResult.Error("Error restoring user")
-                    } else {
-                        return IntentResult.Error("Could not auto sign-in, specify a server & user")
-                    }
-                } else {
-                    return IntentResult.Error("Auto sign-in not enabled, specify a server & user")
-                }
+            val result = prepare(intent)
+            if (result != null) {
+                return result
+            }
+
+            // Existence of this key implies launching from Play Next channel
+            if (intent.getStringParam(INTENT_ITEM_TYPE) != null) {
+                return getDestinationFromChannel(intent)?.let {
+                    IntentResult.Target(
+                        destinations = listOf(it),
+                        addHomeToBackStack = false,
+                    )
+                } ?: IntentResult.Error("Invalid parameters")
             }
 
             if (action == Intent.ACTION_SEARCH || action == "search") {
                 val query = intent.getStringParam(SearchManager.QUERY)
-                return IntentResult.Target(Destination.Search(query ?: ""))
+                return IntentResult.Target(listOf(Destination.Search(query ?: "")))
             }
-            val itemId =
-                intent.getStringParam("itemId")?.toUUIDOrNull()
-                    ?: return IntentResult.Error("No item id provided")
 
+            val itemId = intent.getStringParam("itemId")?.toUUIDOrNull()
             val item =
-                try {
-                    api.userLibraryApi
-                        .getItem(itemId)
-                        .content
-                        .let { BaseItem(it) }
-                } catch (ex: Exception) {
-                    Timber.w(ex, "Error fetching item %s", itemId)
-                    return IntentResult.Error("Could not fetch item $itemId")
+                itemId?.let {
+                    try {
+                        api.userLibraryApi
+                            .getItem(itemId)
+                            .content
+                            .let { BaseItem(it) }
+                    } catch (ex: Exception) {
+                        Timber.w(ex, "Error fetching item %s", itemId)
+                        return IntentResult.Error("Could not fetch item $itemId")
+                    }
                 }
+            val itemDestination = item?.destination()
 
-            val destination =
+            val destinations =
                 when (action) {
                     Intent.ACTION_VIEW, "view" -> {
-                        item.destination()
+                        if (itemDestination != null) {
+                            listOf(itemDestination)
+                        } else {
+                            // Will go to the home page
+                            emptyList()
+                        }
                     }
 
-                    "com.github.damontecres.wholphin.PLAYBACK", "play" -> {
+                    ACTION_PLAYBACK, "play" -> {
+                        if (itemId == null || itemDestination == null) {
+                            return IntentResult.Error("Cannot start playback with no itemId")
+                        }
                         val position = intent.getLongParam("position")?.coerceAtLeast(0)
-                        Destination.Playback(
-                            itemId = itemId,
-                            positionMs = position ?: 0L,
-                        )
+                        val shuffle = intent.getBooleanExtra("shuffle", false)
+
+                        val playbackDestination =
+                            Destination.Playback(
+                                itemId = itemId,
+                                positionMs = position ?: 0L,
+                                shuffle = shuffle,
+                            )
+
+                        if (itemDestination is Destination.Playback) {
+                            listOf(playbackDestination)
+                        } else {
+                            listOf(
+                                itemDestination,
+                                playbackDestination,
+                            )
+                        }
                     }
 
                     else -> {
                         return IntentResult.Error("Invalid action: ${intent.action}")
                     }
                 }
-            return IntentResult.Target(destination)
+
+            return IntentResult.Target(destinations, true)
+        }
+
+        @VisibleForTesting
+        internal suspend fun prepare(intent: Intent): IntentResult? {
+            val appPrefs = userPreferencesService.flow.first().appPreferences
+
+            val userId = intent.getStringParam(INTENT_USER_ID)?.toUUIDOrNull()
+            val serverId = intent.getStringParam(INTENT_SERVER_ID)?.toUUIDOrNull()
+            return if (userId != null && serverId != null) {
+                Timber.v("Intent switches user")
+                val user = serverRepository.tryChangeUser(serverId, userId)
+                if (user != null) {
+                    null
+                } else {
+                    IntentResult.Error("Error restoring user")
+                }
+            } else if (appPrefs.signInAutomatically) {
+                Timber.v("No current user, so restoring last")
+                val result = serverRepository.restoreLastSession()
+                Timber.v("Restored result=%s", result)
+                when (result) {
+                    RestoredSession.None,
+                    is RestoredSession.ServerOnly,
+                    -> {
+                        IntentResult.Error("Could not auto sign-in, specify a server & user")
+                    }
+
+                    is RestoredSession.Success -> {
+                        if (result.currentUser.user.isProtected) {
+                            IntentResult.Error("Could not auto sign-in, user is protected")
+                        } else {
+                            null
+                        }
+                    }
+                }
+            } else {
+                IntentResult.Error("Auto sign-in not enabled")
+            }
         }
 
         private fun Intent.getStringParam(key: String) = getStringExtra(key) ?: data?.getQueryParameter(key)
@@ -148,6 +197,10 @@ class IntentService
             const val INTENT_EPISODE_NUMBER = "epNum"
             const val INTENT_SEASON_NUMBER = "seaNum"
             const val INTENT_SEASON_ID = "seaId"
+            const val INTENT_SERVER_ID = "serverId"
+            const val INTENT_USER_ID = "userId"
+
+            const val ACTION_PLAYBACK = "com.github.damontecres.wholphin.PLAYBACK"
         }
     }
 
@@ -159,6 +212,7 @@ sealed interface IntentResult {
     data object NoOp : IntentResult
 
     data class Target(
-        val destination: Destination,
+        val destinations: List<Destination>,
+        val addHomeToBackStack: Boolean = true,
     ) : IntentResult
 }
