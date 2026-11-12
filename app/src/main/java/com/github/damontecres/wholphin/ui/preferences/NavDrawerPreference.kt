@@ -44,6 +44,7 @@ import com.github.damontecres.wholphin.data.ServerRepository
 import com.github.damontecres.wholphin.data.model.NavDrawerPinnedItem
 import com.github.damontecres.wholphin.data.model.NavPinType
 import com.github.damontecres.wholphin.services.BackdropService
+import com.github.damontecres.wholphin.services.FetcherrRepository
 import com.github.damontecres.wholphin.services.NavDrawerService
 import com.github.damontecres.wholphin.services.NavigationManager
 import com.github.damontecres.wholphin.services.SeerrServerRepository
@@ -305,6 +306,7 @@ class NavDrawerPreferencesViewModel
         private val navDrawerService: NavDrawerService,
         private val serverPreferencesDao: ServerPreferencesDao,
         private val seerrServerRepository: SeerrServerRepository,
+        private val fetcherrRepository: FetcherrRepository,
     ) : ViewModel() {
         val state = MutableStateFlow<List<NavDrawerPin>>(listOf())
 
@@ -365,7 +367,12 @@ class NavDrawerPreferencesViewModel
                                 }
                             serverPreferencesDao.saveNavDrawerPinnedItems(*toSave.toTypedArray())
                             val discoverActive = seerrServerRepository.active.firstOrNull() == true
-                            navDrawerService.updateNavDrawer(user, userDto, discoverActive)
+                            navDrawerService.updateNavDrawer(
+                                user,
+                                userDto,
+                                discoverActive,
+                                fetcherrRepository.active.value,
+                            )
                         } else {
                             throw IllegalStateException("User IDs do not match")
                         }

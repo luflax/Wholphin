@@ -19,6 +19,7 @@ import com.github.damontecres.wholphin.preferences.AppPreferences
 import com.github.damontecres.wholphin.preferences.resetSubtitles
 import com.github.damontecres.wholphin.preferences.updateSubtitlePreferences
 import com.github.damontecres.wholphin.services.BackdropService
+import com.github.damontecres.wholphin.services.FetcherrRepository
 import com.github.damontecres.wholphin.services.NavigationManager
 import com.github.damontecres.wholphin.services.Release
 import com.github.damontecres.wholphin.services.ScreensaverService
@@ -54,6 +55,7 @@ class PreferencesViewModel
         val screensaverService: ScreensaverService,
         private val serverRepository: ServerRepository,
         private val seerrServerRepository: SeerrServerRepository,
+        private val fetcherrRepository: FetcherrRepository,
         private val updateChecker: UpdateChecker,
         private val serverReportService: ServerReportService,
     ) : ViewModel() {
@@ -71,6 +73,7 @@ class PreferencesViewModel
             )
 
         val seerrConnection = seerrServerRepository.connection
+        val fetcherrConnection = fetcherrRepository.connection
 
         private val _quickConnectStatus = MutableStateFlow<LoadingState>(LoadingState.Pending)
         val quickConnectStatus: StateFlow<LoadingState> = _quickConnectStatus

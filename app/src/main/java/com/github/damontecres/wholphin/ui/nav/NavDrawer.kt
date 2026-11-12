@@ -139,6 +139,13 @@ class NavDrawerViewModel
                     )
                 }
 
+                NavDrawerItem.Fetcherr -> {
+                    setIndex(index)
+                    navigationManager.navigateToFromDrawer(
+                        Destination.FetcherrHome,
+                    )
+                }
+
                 is ServerNavDrawerItem -> {
                     setIndex(index)
                     navigationManager.navigateToFromDrawer(item.destination)
@@ -170,6 +177,7 @@ class NavDrawerViewModel
                             is ServerNavDrawerItem -> it.destination
                             is NavDrawerItem.Favorites -> Destination.Favorites
                             is NavDrawerItem.Discover -> Destination.Discover
+                            is NavDrawerItem.Fetcherr -> Destination.FetcherrHome
                             else -> null
                         }
                     }
@@ -243,6 +251,13 @@ sealed interface NavDrawerItem {
             get() = "a_discover"
 
         override fun name(context: Context): String = context.getString(R.string.discover)
+    }
+
+    object Fetcherr : NavDrawerItem {
+        override val id: String
+            get() = "a_fetcherr"
+
+        override fun name(context: Context): String = context.getString(R.string.fetcherr)
     }
 }
 
@@ -674,6 +689,10 @@ fun NavigationDrawerScope.NavItem(
 
                 NavDrawerItem.Discover -> {
                     R.string.fa_magnifying_glass_plus
+                }
+
+                NavDrawerItem.Fetcherr -> {
+                    R.string.fa_cloud_arrow_down
                 }
 
                 is ServerNavDrawerItem -> {

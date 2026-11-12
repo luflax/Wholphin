@@ -1,0 +1,57 @@
+{
+  "id": "discover",
+  "name": "Discover",
+  "lists": [
+    {
+      "id": "trending",
+      "title": "Trending this week",
+      "source": { "kind": "trending", "window": "week" },
+      "cards": {
+        "page": 1,
+        "total_pages": 7,
+        "total_results": 140,
+        "items": [
+          {
+            "key": "movie:693134",
+            "media_type": "movie",
+            "tmdb_id": 693134,
+            "title": "Dune: Part Two",
+            "year": 2024,
+            "overview": "Follow the mythic journey of Paul Atreides.",
+            "vote_average": 8.2,
+            "availability": "available",
+            "jellyfin_item_id": "1c3a0f8e2b7d4c6a9e5f0b1d2c3e4f5a",
+            "poster": { "small": "https://img/w185/p.jpg", "medium": "https://img/w342/p.jpg", "large": "https://img/w780/p.jpg", "original": "https://img/original/p.jpg" },
+            "backdrop": { "small": "https://img/w300/b.jpg", "medium": "https://img/w780/b.jpg", "large": "https://img/w1280/b.jpg", "original": "https://img/original/b.jpg" }
+          },
+          {
+            "key": "series:126308",
+            "media_type": "series",
+            "tmdb_id": 126308,
+            "title": "Shōgun",
+            "year": null,
+            "overview": "",
+            "vote_average": 8.6,
+            "availability": "partially_available",
+            "jellyfin_item_id": null,
+            "poster": null,
+            "backdrop": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "anime",
+      "title": "Anime",
+      "source": { "kind": "discover", "media": "series" },
+      "error": "TMDB timed out",
+      "cards": { "page": 1, "total_pages": 0, "total_results": 0, "items": [] }
+    },
+    {
+      "id": "upcoming",
+      "title": "Upcoming",
+      "source": { "kind": "upcoming" },
+      "cards": { "page": 1, "total_pages": 1, "total_results": 0, "items": [] }
+    }
+  ]
+}

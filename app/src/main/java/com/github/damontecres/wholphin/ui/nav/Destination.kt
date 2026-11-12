@@ -167,6 +167,38 @@ sealed class Destination(
     ) : Destination(false)
 
     @Serializable
+    data object FetcherrHome : Destination(false)
+
+    @Serializable
+    data class FetcherrMovie(
+        val tmdbId: Int,
+    ) : Destination(false)
+
+    @Serializable
+    data class FetcherrSeries(
+        val tmdbId: Int,
+    ) : Destination(false)
+
+    @Serializable
+    data class FetcherrSeason(
+        val tmdbId: Int,
+        val season: Int,
+        val seriesTitle: String,
+    ) : Destination(false)
+
+    @Serializable
+    data class FetcherrPerson(
+        val tmdbId: Int,
+    ) : Destination(false)
+
+    /** Every card of a discover list, page by page */
+    @Serializable
+    data class FetcherrList(
+        val listId: String,
+        val title: String,
+    ) : Destination(false)
+
+    @Serializable
     data object NowPlaying : Destination(true)
 
     @Serializable

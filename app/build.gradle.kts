@@ -5,6 +5,7 @@ import com.google.protobuf.gradle.id
 import com.mikepenz.aboutlibraries.plugin.DuplicateMode
 import com.mikepenz.aboutlibraries.plugin.DuplicateRule
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import org.openapitools.generator.gradle.plugin.tasks.GenerateTask
 import java.util.Base64
 import java.util.Properties
 
@@ -195,6 +196,7 @@ configure<ApplicationExtension> {
     sourceSets {
         getByName("main") {
             kotlin.directories += "$buildDir/generated/seerr_api/src/main/kotlin"
+            kotlin.directories += "$buildDir/generated/fetcherr_api/src/main/kotlin"
         }
     }
 
@@ -284,8 +286,53 @@ openApiGenerate {
     }
 }
 
+val openApiGenerateFetcherr by tasks.registering(GenerateTask::class) {
+    generatorName.set("kotlin")
+    // A URI, since the OpenAPI 3.1 parser rejects file paths containing spaces
+    inputSpec.set(
+        file("src/main/fetcherr/fetcherr-api.json")
+            .toURI()
+            .toString(),
+    )
+    // The spec omits some response descriptions & reuses operationIds across tags (eg `pause`)
+    validateSpec.set(false)
+    ignoreFileOverride.set("$projectDir/src/main/fetcherr/.openapi-generator-ignore")
+    // Polymorphic oneOf types are hand-written in api/fetcherr/model/FetcherrPolymorphic.kt, and the
+    // paged item schemas the spec inlines are pointed back at the named models they copy
+    val fetcherrModel = "com.github.damontecres.wholphin.api.fetcherr.model"
+    schemaMappings.set(
+        mapOf(
+            "Scope" to "$fetcherrModel.Scope",
+            "Coverage" to "$fetcherrModel.Coverage",
+            "Event" to "$fetcherrModel.Event",
+            "ListSource" to "$fetcherrModel.ListSource",
+            "SearchResult" to "$fetcherrModel.SearchResult",
+            "Page_SearchResult_items_inner" to "$fetcherrModel.SearchResult",
+            "Page_Card_items_inner" to "$fetcherrModel.Card",
+            "Page_RequestSummary_items_inner" to "$fetcherrModel.RequestSummary",
+        ),
+    )
+    templateDir.set("$projectDir/src/main/seerr/templates")
+    outputDir.set("$buildDir/generated/fetcherr_api")
+    apiPackage.set("com.github.damontecres.wholphin.api.fetcherr")
+    modelPackage.set("com.github.damontecres.wholphin.api.fetcherr.model")
+    groupId.set("com.github.damontecres.wholphin.api.fetcherr")
+    id.set("fetcherr-api")
+    packageName.set("com.github.damontecres.wholphin.api.fetcherr")
+    additionalProperties.apply {
+        put("serializationLibrary", "kotlinx_serialization")
+        put("sortModelPropertiesByRequiredFlag", true)
+        put("sortParamsByRequiredFlag", true)
+        put("useCoroutines", true)
+        put("enumPropertyNaming", "UPPERCASE")
+        put("modelMutable", false)
+        put("supportAndroidApiLevel25AndBelow", false)
+    }
+}
+
 tasks.named("preBuild") {
     dependsOn.add(tasks.named("openApiGenerate"))
+    dependsOn.add(openApiGenerateFetcherr)
 }
 
 dependencies {

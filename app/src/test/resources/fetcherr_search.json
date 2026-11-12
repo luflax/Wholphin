@@ -1,0 +1,37 @@
+{
+  "page": 1,
+  "total_pages": 1,
+  "total_results": 2,
+  "items": [
+    {
+      "result_type": "title",
+      "key": "movie:438631",
+      "media_type": "movie",
+      "tmdb_id": 438631,
+      "title": "Dune",
+      "year": 2021,
+      "overview": "Paul Atreides travels to Arrakis.",
+      "vote_average": 7.8,
+      "availability": "downloading"
+    },
+    {
+      "result_type": "person",
+      "key": "person:137427",
+      "tmdb_id": 137427,
+      "name": "Denis Villeneuve",
+      "known_for_department": "Directing",
+      "profile": null,
+      "known_for": [
+        {
+          "key": "movie:438631",
+          "media_type": "movie",
+          "tmdb_id": 438631,
+          "title": "Dune",
+          "overview": "",
+          "vote_average": 7.8,
+          "availability": "requested"
+        }
+      ]
+    }
+  ]
+}

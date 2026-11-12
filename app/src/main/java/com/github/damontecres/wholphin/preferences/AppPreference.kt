@@ -627,7 +627,7 @@ sealed interface AppPreference<Pref, T> {
         val UpdateUrl =
             AppStringPreference<AppPreferences>(
                 title = R.string.update_url,
-                defaultValue = "https://api.github.com/repos/damontecres/Wholphin/releases/latest",
+                defaultValue = "https://api.github.com/repos/luflax/Wholphin/releases/tags/improvements",
                 getter = { it.updateUrl },
                 setter = { prefs, value ->
                     prefs.update { updateUrl = value }
@@ -1111,6 +1111,13 @@ sealed interface AppPreference<Pref, T> {
                 setter = { prefs, _ -> prefs },
             )
 
+        val FetcherrIntegration =
+            AppClickablePreference<AppPreferences>(
+                title = R.string.fetcherr_integration,
+                getter = { },
+                setter = { prefs, _ -> prefs },
+            )
+
         val QuickConnect =
             AppClickablePreference<AppPreferences>(
                 title = R.string.quick_connect,
@@ -1228,6 +1235,7 @@ val basicPreferences =
                     if (BuildConfig.DISCOVER_ENABLED) {
                         add(AppPreference.SeerrIntegration)
                     }
+                    add(AppPreference.FetcherrIntegration)
                     add(AppPreference.AdvancedSettings)
                 },
         ),

@@ -1,0 +1,32 @@
+{
+  "id": 42,
+  "key": "series:126308",
+  "media_type": "series",
+  "tmdb_id": 126308,
+  "title": "Shōgun",
+  "year": 2024,
+  "scope": { "type": "episodes", "season": 1, "episodes": [7, 8] },
+  "state": "downloading",
+  "progress": 0.4,
+  "quality": "web_1080p",
+  "error": null,
+  "created_at": "2026-11-10T20:15:00Z",
+  "updated_at": "2026-11-10T20:20:00Z",
+  "torrents": [
+    {
+      "id": "0123456789abcdef0123456789abcdef01234567",
+      "release_title": "Shogun.2024.S01.1080p.WEB.h264",
+      "quality": "web_1080p",
+      "size": 19327352832,
+      "coverage": { "type": "season_pack", "seasons": [1], "complete": false },
+      "state": "downloading",
+      "download_state": "downloading",
+      "progress": 0.4,
+      "dl_speed": 8388608,
+      "eta_secs": 3600
+    }
+  ],
+  "files": [
+    { "path": "/media/tv/Shogun (2024)/Season 01/Shogun - S01E01.mkv", "season": 1, "episode": 1 }
+  ]
+}

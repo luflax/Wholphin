@@ -285,7 +285,8 @@ fun DialogPopupContent(
         )
         val scope = rememberCoroutineScope()
         val listState = rememberLazyListState()
-        val focusRequesters = remember { List(dialogItems.size) { FocusRequester() } }
+        // Keyed on the size, since a dialog's items may change while it is showing
+        val focusRequesters = remember(dialogItems.size) { List(dialogItems.size) { FocusRequester() } }
         LazyColumn(
             state = listState,
             modifier = Modifier,

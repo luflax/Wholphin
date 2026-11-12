@@ -261,4 +261,11 @@ message AppPreferences {
   PhotoPreferences photo_preferences = 12;
   MusicPreferences music_preferences = 13;
   ExperimentalPreferences experimental_preferences = 14;
+  FetcherrSettings fetcherr_settings = 15;
+}
+
+// Connection to a Fetcherr server, shared by every user of the app
+message FetcherrSettings {
+  string url = 1;
+  string api_key = 2;
 }

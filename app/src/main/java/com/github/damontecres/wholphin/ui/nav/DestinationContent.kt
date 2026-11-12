@@ -41,6 +41,12 @@ import com.github.damontecres.wholphin.ui.detail.series.SeriesDetails
 import com.github.damontecres.wholphin.ui.detail.series.SeriesOverview
 import com.github.damontecres.wholphin.ui.discover.DiscoverPage
 import com.github.damontecres.wholphin.ui.discover.DiscoverRequestGrid
+import com.github.damontecres.wholphin.ui.fetcherr.FetcherrHomePage
+import com.github.damontecres.wholphin.ui.fetcherr.FetcherrListGrid
+import com.github.damontecres.wholphin.ui.fetcherr.detail.FetcherrMovieDetails
+import com.github.damontecres.wholphin.ui.fetcherr.detail.FetcherrPersonPage
+import com.github.damontecres.wholphin.ui.fetcherr.detail.FetcherrSeasonPage
+import com.github.damontecres.wholphin.ui.fetcherr.detail.FetcherrSeriesDetails
 import com.github.damontecres.wholphin.ui.main.HomePage
 import com.github.damontecres.wholphin.ui.main.settings.HomeSettingsPage
 import com.github.damontecres.wholphin.ui.playback.PlayExternalPage
@@ -427,6 +433,36 @@ fun DestinationContent(
                 positionCallback = { _, _ -> },
                 modifier = modifier,
             )
+        }
+
+        Destination.FetcherrHome -> {
+            LaunchedEffect(Unit) { onClearBackdrop.invoke() }
+            FetcherrHomePage(
+                preferences = preferences,
+                modifier = modifier,
+            )
+        }
+
+        is Destination.FetcherrMovie -> {
+            FetcherrMovieDetails(destination = destination, modifier = modifier)
+        }
+
+        is Destination.FetcherrSeries -> {
+            FetcherrSeriesDetails(destination = destination, modifier = modifier)
+        }
+
+        is Destination.FetcherrSeason -> {
+            FetcherrSeasonPage(destination = destination, modifier = modifier)
+        }
+
+        is Destination.FetcherrPerson -> {
+            LaunchedEffect(Unit) { onClearBackdrop.invoke() }
+            FetcherrPersonPage(destination = destination, modifier = modifier)
+        }
+
+        is Destination.FetcherrList -> {
+            LaunchedEffect(Unit) { onClearBackdrop.invoke() }
+            FetcherrListGrid(destination = destination, modifier = modifier)
         }
     }
 }

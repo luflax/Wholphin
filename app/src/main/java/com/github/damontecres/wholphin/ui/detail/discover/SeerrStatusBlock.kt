@@ -2,15 +2,12 @@ package com.github.damontecres.wholphin.ui.detail.discover
 
 import androidx.annotation.StringRes
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -21,7 +18,6 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.pluralStringResource
@@ -36,6 +32,7 @@ import com.github.damontecres.wholphin.data.model.SeerrDownload
 import com.github.damontecres.wholphin.data.model.SeerrDownloadState
 import com.github.damontecres.wholphin.ui.AppColors
 import com.github.damontecres.wholphin.ui.components.BasicDialog
+import com.github.damontecres.wholphin.ui.components.DownloadProgressBar
 import com.github.damontecres.wholphin.ui.formatBytes
 import com.github.damontecres.wholphin.ui.formatDurationWithDays
 
@@ -46,12 +43,6 @@ import com.github.damontecres.wholphin.ui.formatDurationWithDays
  * action buttons off screen.
  */
 private const val MAX_VISIBLE_DOWNLOADS = 3
-
-/**
- * The smallest fraction the progress bar will draw, so that a barely-started download is still
- * visible. Real payloads start well below 1%.
- */
-private const val MIN_VISIBLE_PROGRESS = 0.015f
 
 /**
  * Shows the in-progress Radarr/Sonarr downloads for a requested item
@@ -240,35 +231,6 @@ private fun SeerrDownloadRow(
                 )
             }
         }
-    }
-}
-
-/**
- * A determinate progress bar
- *
- * `androidx.tv.material3` has no progress indicator, so this follows the same approach as the
- * played-percent bar on the item cards.
- */
-@Composable
-private fun DownloadProgressBar(
-    progress: Float,
-    modifier: Modifier = Modifier,
-) {
-    val animated by animateFloatAsState(progress, label = "seerr_download_progress")
-    Box(
-        modifier =
-            modifier
-                .height(4.dp)
-                .clip(RoundedCornerShape(2.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant),
-    ) {
-        Box(
-            modifier =
-                Modifier
-                    .fillMaxHeight()
-                    .fillMaxWidth(animated.coerceIn(MIN_VISIBLE_PROGRESS, 1f))
-                    .background(MaterialTheme.colorScheme.tertiary),
-        )
     }
 }
 

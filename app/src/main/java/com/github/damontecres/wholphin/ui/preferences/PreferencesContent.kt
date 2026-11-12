@@ -64,6 +64,7 @@ import com.github.damontecres.wholphin.preferences.experimentalPreferences
 import com.github.damontecres.wholphin.preferences.lazyListWrapScrolling
 import com.github.damontecres.wholphin.preferences.screensaverPreferences
 import com.github.damontecres.wholphin.preferences.updatePlaybackPreferences
+import com.github.damontecres.wholphin.services.FetcherrConnection
 import com.github.damontecres.wholphin.services.Release
 import com.github.damontecres.wholphin.services.SeerrConnectionStatus
 import com.github.damontecres.wholphin.services.UpdateChecker
@@ -80,6 +81,7 @@ import com.github.damontecres.wholphin.ui.preferences.subtitle.SubtitleSettings
 import com.github.damontecres.wholphin.ui.serverSupportedMessage
 import com.github.damontecres.wholphin.ui.setup.ReleaseNotes
 import com.github.damontecres.wholphin.ui.setup.UpdateViewModel
+import com.github.damontecres.wholphin.ui.setup.fetcherr.FetcherrSettingsDialog
 import com.github.damontecres.wholphin.ui.setup.seerr.SeerrDialog
 import com.github.damontecres.wholphin.ui.setup.seerr.SeerrDialogMode
 import com.github.damontecres.wholphin.ui.setup.seerr.SwitchSeerrViewModel
@@ -125,6 +127,8 @@ fun PreferencesContent(
     var cacheUsage by remember { mutableStateOf(CacheUsage(0, 0, 0)) }
     val seerrConnection by viewModel.seerrConnection.collectAsState()
     var seerrDialogMode by remember { mutableStateOf<SeerrDialogMode>(SeerrDialogMode.None) }
+    val fetcherrConnection by viewModel.fetcherrConnection.collectAsState()
+    var showFetcherrDialog by remember { mutableStateOf(false) }
     var showQuickConnectDialog by remember { mutableStateOf(false) }
     var showLocaleChoiceDialog by remember { mutableStateOf(false) }
 
@@ -539,6 +543,23 @@ fun PreferencesContent(
                                     )
                                 }
 
+                                AppPreference.FetcherrIntegration -> {
+                                    ClickPreference(
+                                        title = stringResource(pref.title),
+                                        onClick = { showFetcherrDialog = true },
+                                        modifier = focusModifier,
+                                        summary =
+                                            when (fetcherrConnection) {
+                                                FetcherrConnection.NotConfigured -> stringResource(R.string.add_server)
+                                                is FetcherrConnection.Connecting -> stringResource(R.string.fetcherr_testing)
+                                                is FetcherrConnection.Error -> stringResource(R.string.error)
+                                                is FetcherrConnection.Connected -> stringResource(R.string.enabled)
+                                            },
+                                        onLongClick = {},
+                                        interactionSource = interactionSource,
+                                    )
+                                }
+
                                 AppPreference.QuickConnect -> {
                                     ClickPreference(
                                         title = stringResource(pref.title),
@@ -730,6 +751,10 @@ fun PreferencesContent(
         onDismissRequest = { seerrDialogMode = SeerrDialogMode.None },
         seerrVm = seerrVm,
     )
+
+    if (showFetcherrDialog) {
+        FetcherrSettingsDialog(onDismissRequest = { showFetcherrDialog = false })
+    }
 
     if (showQuickConnectDialog) {
         val quickConnectStatus by viewModel.quickConnectStatus.collectAsState(LoadingState.Pending)

@@ -1,0 +1,2 @@
+# Variants of the oneOf schemas that are hand-written in FetcherrPolymorphic.kt
+**/model/*OneOf*.kt

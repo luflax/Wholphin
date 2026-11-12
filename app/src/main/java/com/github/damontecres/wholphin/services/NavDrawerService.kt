@@ -51,6 +51,7 @@ class NavDrawerService
         private val serverRepository: ServerRepository,
         private val serverPreferencesDao: ServerPreferencesDao,
         private val seerrServerRepository: SeerrServerRepository,
+        private val fetcherrRepository: FetcherrRepository,
         private val musicService: MusicService,
     ) {
         private val _state = MutableStateFlow(NavDrawerItemState())
@@ -62,18 +63,20 @@ class NavDrawerService
                 serverRepository.currentUserFlow,
                 serverRepository.currentUserDtoFlow,
                 seerrServerRepository.active,
-            ) { user, userDto, discoverActive ->
-                Triple(user, userDto, discoverActive)
-            }.collectLatestIn(coroutineScope) { (user, userDto, discoverActive) ->
+                fetcherrRepository.active,
+            ) { user, userDto, discoverActive, fetcherrActive ->
+                NavDrawerInputs(user, userDto, discoverActive, fetcherrActive)
+            }.collectLatestIn(coroutineScope) { (user, userDto, discoverActive, fetcherrActive) ->
                 Timber.d(
-                    "User updated: user=%s, userDto=%s, discoverActive=%s",
+                    "User updated: user=%s, userDto=%s, discoverActive=%s, fetcherrActive=%s",
                     user?.id,
                     userDto?.id,
                     discoverActive,
+                    fetcherrActive,
                 )
                 try {
                     if (user != null && userDto != null && user.id == userDto.id) {
-                        updateNavDrawer(user, userDto, discoverActive)
+                        updateNavDrawer(user, userDto, discoverActive, fetcherrActive)
                     } else {
                         _state.update { NavDrawerItemState() }
                     }
@@ -191,11 +194,13 @@ class NavDrawerService
             user: JellyfinUser,
             userDto: ServerUserConfig,
             discoverActive: Boolean,
+            fetcherrActive: Boolean,
         ) {
             val builtins =
                 buildList {
                     add(NavDrawerItem.Favorites)
                     if (discoverActive) add(NavDrawerItem.Discover)
+                    if (fetcherrActive) add(NavDrawerItem.Fetcherr)
                 }
             val allLibraries = getAllUserLibraries(user.id, userDto.tvAccess)
             val libraries =
@@ -261,3 +266,10 @@ data class NavDrawerItemState(
 )
 
 val UserDto.tvAccess: Boolean get() = policy?.enableLiveTvAccess == true
+
+private data class NavDrawerInputs(
+    val user: JellyfinUser?,
+    val userDto: ServerUserConfig?,
+    val discoverActive: Boolean,
+    val fetcherrActive: Boolean,
+)
