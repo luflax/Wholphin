@@ -215,7 +215,7 @@ class FetcherrSettingsViewModel
                         updateTop<FetcherrSetupStep.Pairing> { it.copy(phase = PairingPhase.Requesting) }
                         val code =
                             try {
-                                pairing.start(url, PairingRequest(deviceInfo.id, deviceInfo.name, APP_NAME))
+                                pairing.start(url, PairingRequest( deviceInfo.name, APP_NAME))
                             } catch (ex: CancellationException) {
                                 throw ex
                             } catch (ex: Exception) {

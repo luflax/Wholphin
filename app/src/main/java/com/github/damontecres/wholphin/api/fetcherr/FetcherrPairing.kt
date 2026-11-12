@@ -34,8 +34,7 @@ data class FetcherrInfo(
 
 @Serializable
 data class PairingRequest(
-    @SerialName("device_id") val deviceId: String,
-    @SerialName("device_name") val deviceName: String,
+    @SerialName("name") val deviceName: String,
     val app: String,
 )
 
