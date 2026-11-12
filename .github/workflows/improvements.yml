@@ -1,0 +1,86 @@
+name: Improvements build
+
+on:
+  push:
+    branches:
+      - improvements
+  workflow_dispatch:
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BRANCH_NAME: ${{ github.ref_name }}
+  TAG_NAME: improvements
+  GRADLE_OPTS: "-Dorg.gradle.jvmargs='-Xmx12g -XX:MaxMetaspaceSize=1024m'"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout the code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0 # Need the tags to build
+      - name: Setup
+        uses: ./.github/actions/setup
+
+      - name: Get version name
+        run: |
+          echo "VERSION_NAME=$(git describe --tags --match 'v*' --long)" >> "$GITHUB_ENV"
+
+      # No release keystore: sign with the auto-generated Android debug key so the APK is
+      # installable. The key is cached so that successive builds can update each other.
+      - name: Restore debug keystore
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: wholphin-debug-keystore
+
+      - name: Build release APK
+        run: |
+          echo "release.signing.config=debug" > local.properties
+          ./gradlew clean assembleDefaultRelease
+
+      # The in-app updater looks for assets named Wholphin-release[-<abi>].apk
+      - name: Rename APKs
+        run: |
+          mkdir -p dist
+          find app/build/outputs/apk -name '*.apk' -print0 |
+            while IFS= read -r -d '' apk; do
+              abi="$(basename "$apk" | grep -oE '(armeabi-v7a|arm64-v8a|x86_64)\.apk$' | sed 's/\.apk$//' || true)"
+              short_name="Wholphin-release${abi:+-$abi}.apk"
+              echo "$apk => dist/$short_name"
+              cp "$apk" "dist/$short_name"
+            done
+
+      - name: Checksums
+        run: |
+          sha256sum dist/*.apk
+
+      - name: Upload mapping files
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: mapping
+          path: app/build/outputs/**/mapping.txt
+          compression-level: 6
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete "$TAG_NAME" --cleanup-tag -y || true
+
+          gh release create "$TAG_NAME" \
+            --latest=false --prerelease \
+            --title "$VERSION_NAME" \
+            --target "$GITHUB_SHA" \
+            --notes "Build of \`$BRANCH_NAME\` at $GITHUB_SHA. Signed with a CI debug key, not the official release key." \
+            dist/*.apk

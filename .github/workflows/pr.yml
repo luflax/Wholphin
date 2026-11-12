@@ -1,7 +1,8 @@
 name: PR
 
+# Disabled: this fork builds only from the `improvements` branch (see improvements.yml)
 on:
-  pull_request:
+  workflow_dispatch:
 
 defaults:
   run:

@@ -1,9 +1,8 @@
 name: Create release
 
+# Disabled: this fork builds only from the `improvements` branch (see improvements.yml)
 on:
-  push:
-    tags:
-      - v*
+  workflow_dispatch:
 
 defaults:
   run:
