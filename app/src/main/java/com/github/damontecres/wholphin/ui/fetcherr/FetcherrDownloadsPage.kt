@@ -126,6 +126,16 @@ class FetcherrDownloadsViewModel
         val state: StateFlow<DownloadsState> = _state
 
         private var loadJob: Job? = null
+        private var moreJob: Job? = null
+
+        /**
+         * Whether [reload] is still loading. Cleared before its result is published, so that
+         * [loadMore] works as soon as the list shows, unlike checking whether [loadJob] is active.
+         */
+        @Volatile private var reloading = false
+
+        /** Like [reloading], for [loadMore] */
+        @Volatile private var loadingMore = false
 
         override fun followedTitles(): Collection<String> = emptyList()
 
@@ -146,6 +156,9 @@ class FetcherrDownloadsViewModel
          */
         fun reload(filter: DownloadsFilter = _state.value.filter) {
             loadJob?.cancel()
+            moreJob?.cancel()
+            loadingMore = false
+            reloading = true
             val current = _state.value
             val refresh = filter == current.filter && current.loading is LoadingState.Success
             if (!refresh) {
@@ -160,6 +173,7 @@ class FetcherrDownloadsViewModel
                             } else {
                                 loadAll(filter.states.orEmpty()) to null
                             }
+                        reloading = false
                         mutableLive.update { it.withRequests(requests).filtered(filter.states) }
                         _state.update {
                             it.copy(
@@ -171,6 +185,7 @@ class FetcherrDownloadsViewModel
                     } catch (ex: CancellationException) {
                         throw ex
                     } catch (ex: Exception) {
+                        reloading = false
                         _state.update { it.copy(loading = LoadingState.Error(ex)) }
                     }
                 }
@@ -179,17 +194,24 @@ class FetcherrDownloadsViewModel
         /** Load the next page, when the user nears the end of the list */
         fun loadMore() {
             val current = _state.value
-            if (!current.hasMore || current.loading !is LoadingState.Success || loadJob?.isActive == true) return
-            loadJob =
+            if (!current.hasMore || current.loading !is LoadingState.Success || reloading || loadingMore) return
+            loadingMore = true
+            moreJob =
                 viewModelScope.launchIO(ExceptionHandler(autoToast = true)) {
-                    val result = fetcherrRepository.call { list(it, current.filter, current.page + 1) }
+                    val result =
+                        try {
+                            fetcherrRepository.call { list(it, current.filter, current.page + 1) }
+                        } finally {
+                            loadingMore = false
+                        }
+                    // The page first, so that a scroll right after the rows show asks for the next one
+                    _state.update { it.copy(page = result.page, totalPages = result.totalPages) }
                     mutableLive.update { live ->
                         val known = live.requests.mapTo(HashSet()) { it.id }
                         live
                             .withRequests(live.requests + result.items.filterNot { it.id in known })
                             .filtered(current.filter.states)
                     }
-                    _state.update { it.copy(page = result.page, totalPages = result.totalPages) }
                 }
         }
 
