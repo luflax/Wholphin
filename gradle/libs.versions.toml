@@ -29,6 +29,8 @@ androidx-media3 = "1.11.1"
 # Dolby Vision profile 7 -> 8.1 RPU rewrite (libdovi behind JNI), MIT
 exoplayerhdrutils = "0.4.1"
 coil = "3.6.3"
+# QR codes for pairing with Fetcherr, Apache 2.0
+zxing = "3.5.3"
 jellyfin-sdk = "1.7.1"
 nav3Core = "1.1.7"
 lifecycleViewmodelNav3 = "2.11.0"
@@ -128,6 +130,7 @@ coil-network-cachecontrol = { module = "io.coil-kt.coil3:coil-network-cache-cont
 coil-network-okhttp = { module = "io.coil-kt.coil3:coil-network-okhttp", version.ref = "coil" }
 coil-gif = { module = "io.coil-kt.coil3:coil-gif", version.ref = "coil" }
 coil-svg = { module = "io.coil-kt.coil3:coil-svg", version.ref = "coil" }
+zxing-core = { module = "com.google.zxing:core", version.ref = "zxing" }
 
 jellyfin-core = { module = "org.jellyfin.sdk:jellyfin-core", version.ref = "jellyfin-sdk" }
 jellyfin-api = { module = "org.jellyfin.sdk:jellyfin-api", version.ref = "jellyfin-sdk" }

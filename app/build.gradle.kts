@@ -365,6 +365,8 @@ dependencies {
     implementation(libs.ass.media)
     implementation(libs.exoplayerhdrutils)
 
+    implementation(libs.zxing.core)
+
     implementation(libs.coil.core)
     implementation(libs.coil.compose)
     implementation(libs.coil.network.cachecontrol)

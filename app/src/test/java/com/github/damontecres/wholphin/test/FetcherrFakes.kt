@@ -29,9 +29,13 @@ import okhttp3.Protocol
 import okhttp3.Request
 import okhttp3.Response
 import okhttp3.ResponseBody.Companion.toResponseBody
+import okio.Buffer
 import java.io.IOException
 import java.nio.file.Files
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CopyOnWriteArraySet
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.ceil
 
 const val FAKE_URL = "http://fetcherr.test"
@@ -83,10 +87,25 @@ class FakeFetcherrServer : Interceptor {
 
     val client: OkHttpClient = OkHttpClient.Builder().addInterceptor(this).build()
 
+    /** False for a version from before pairing, without `/api/system/info` or `/api/auth/pair` */
+    @Volatile var pairingApi = true
+
+    /** Hosts where something other than Fetcherr answers */
+    val otherHosts = CopyOnWriteArraySet<String>()
+
+    /** Pairings by secret */
+    val pairings = ConcurrentHashMap<String, FakePairing>()
+    private val pairingCount = AtomicInteger()
+
+    /** The pairing the TV is currently showing */
+    val latestPairing: FakePairing? get() = pairings.values.maxByOrNull { it.number }
+
     override fun intercept(chain: Interceptor.Chain): Response {
         val request = chain.request()
         calls.add("${request.method} ${request.url.encodedPath}" + (request.url.encodedQuery?.let { "?$it" } ?: ""))
         if (!up) throw IOException("Fetcherr is down")
+        if (request.url.host in otherHosts) return respond(request, 404, "<html>Not found</html>")
+        pairingResponse(request)?.let { return it }
         if (request.header(FetcherrApiClient.API_KEY_HEADER) != apiKey) {
             return respond(request, 401, """{"error":{"code":"unauthorized","message":"Invalid API key"}}""")
         }
@@ -125,6 +144,46 @@ class FakeFetcherrServer : Interceptor {
         }
     }
 
+    /** The endpoints that answer without an API key */
+    private fun pairingResponse(request: Request): Response? {
+        val path = request.url.encodedPath
+        val public = path == "/api/system/info" || path.startsWith("/api/auth/pair")
+        if (!public) return null
+        if (!pairingApi) return respond(request, 404, """{"error":{"code":"not_found","message":"Not found"}}""")
+        return when {
+            path == "/api/system/info" -> {
+                respond(request, 200, """{"product":"Fetcherr","version":"0.5.0","name":"Home","pairing":true}""")
+            }
+
+            path == "/api/auth/pair" && request.method == "POST" -> {
+                val number = pairingCount.incrementAndGet()
+                val body =
+                    Buffer().also { request.body!!.writeTo(it) }.readUtf8()
+                val pairing = FakePairing(number, "K7Q%03d".format(number), "secret$number", body)
+                pairings[pairing.secret] = pairing
+                respond(
+                    request,
+                    201,
+                    """{"code":"${pairing.code}","secret":"${pairing.secret}","expires_in":300,"interval":0}""",
+                )
+            }
+
+            request.method == "DELETE" -> {
+                pairings.remove(path.substringAfterLast('/'))
+                respond(request, 204, "")
+            }
+
+            else -> {
+                val pairing = pairings[path.substringAfterLast('/')]
+                when (pairing?.status) {
+                    null, "expired" -> respond(request, 410, """{"error":{"code":"expired","message":"Expired"}}""")
+                    "approved" -> respond(request, 200, """{"status":"approved","api_key":"$apiKey"}""")
+                    else -> respond(request, 200, """{"status":"${pairing.status}"}""")
+                }
+            }
+        }
+    }
+
     private fun <T> json(
         serializer: kotlinx.serialization.KSerializer<T>,
         value: T,
@@ -147,6 +206,21 @@ class FakeFetcherrServer : Interceptor {
         const val PAGE_SIZE = 20
         val STATUS = SystemStatus(ConfiguredServices(true, true, true, true, true), "0.4.0")
     }
+}
+
+/**
+ * A code shown on the TV
+ *
+ * @param request the body the TV sent
+ */
+class FakePairing(
+    val number: Int,
+    val code: String,
+    val secret: String,
+    val request: String,
+) {
+    /** pending, approved, denied or expired, as set by the user in the web UI */
+    @Volatile var status = "pending"
 }
 
 fun fakeRequest(
