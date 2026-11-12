@@ -34,7 +34,11 @@ jobs:
 
       - name: Get version name
         run: |
-          echo "VERSION_NAME=$(git describe --tags --match 'v*' --long)" >> "$GITHUB_ENV"
+          if ! VERSION_NAME=$(git describe --tags --match 'v*' --long); then
+            echo "::error::No v* tags found. Push them to this repo with: git push <remote> --tags"
+            exit 1
+          fi
+          echo "VERSION_NAME=$VERSION_NAME" >> "$GITHUB_ENV"
 
       # No release keystore: sign with the auto-generated Android debug key so the APK is
       # installable. The key is cached so that successive builds can update each other.
