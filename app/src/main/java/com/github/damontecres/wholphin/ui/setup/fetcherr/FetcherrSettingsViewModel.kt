@@ -14,20 +14,17 @@ import com.github.damontecres.wholphin.data.ServerRepository
 import com.github.damontecres.wholphin.preferences.AppPreferences
 import com.github.damontecres.wholphin.services.FetcherrConnection
 import com.github.damontecres.wholphin.services.FetcherrRepository
-import com.github.damontecres.wholphin.services.hilt.IoCoroutineScope
 import com.github.damontecres.wholphin.services.hilt.StandardOkHttpClient
 import com.github.damontecres.wholphin.services.normalizeFetcherrUrl
 import com.github.damontecres.wholphin.ui.launchIO
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.launch
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
@@ -52,7 +49,6 @@ class FetcherrSettingsViewModel
         private val preferences: DataStore<AppPreferences>,
         private val deviceInfo: DeviceInfo,
         @param:StandardOkHttpClient okHttpClient: OkHttpClient,
-        @param:IoCoroutineScope private val appScope: CoroutineScope,
     ) : ViewModel() {
         val connection: StateFlow<FetcherrConnection> = fetcherrRepository.connection
 
@@ -68,6 +64,9 @@ class FetcherrSettingsViewModel
         val state: StateFlow<FetcherrSetupState> = _state
 
         private var pairingJob: Job? = null
+
+        /** The code being shown, kept to show it again after Back */
+        private var currentCode: ActiveCode? = null
         private var started = false
 
         /** Show the saved server, or start looking for one */
@@ -104,12 +103,8 @@ class FetcherrSettingsViewModel
             }
         }
 
-        private fun stepFor(found: FetcherrProbe.Found): FetcherrSetupStep =
-            if (found.canPair) {
-                FetcherrSetupStep.Pairing(found.url, found.info?.name)
-            } else {
-                FetcherrSetupStep.ApiKey(found.url, pairingUnavailable = true)
-            }
+        /** Try pairing; a server that can't pair falls back to the API key once it says so */
+        private fun stepFor(found: FetcherrProbe.Found): FetcherrSetupStep = FetcherrSetupStep.Pairing(found.url)
 
         /** Go back a screen. Returns false if there is none, so that the dialog closes. */
         fun back(): Boolean {
@@ -125,9 +120,8 @@ class FetcherrSettingsViewModel
             stopPairing()
             val top = stack.lastOrNull()
             if (top is FetcherrSetupStep.Pairing) {
-                // Any code shown before was withdrawn when the user left, so start with a new one
                 _state.update { it.copy(stack = stack.dropLast(1) + top.copy(phase = PairingPhase.Requesting)) }
-                startPairing(top.url)
+                startPairing(top.url, fresh = false)
             } else {
                 _state.update { it.copy(stack = stack) }
             }
@@ -148,7 +142,7 @@ class FetcherrSettingsViewModel
         // --- Saved server ---
 
         fun pairAgain() {
-            push(FetcherrSetupStep.Pairing(_state.value.savedUrl, null))
+            push(FetcherrSetupStep.Pairing(_state.value.savedUrl))
         }
 
         fun changeServer() {
@@ -186,9 +180,12 @@ class FetcherrSettingsViewModel
 
         // --- Pairing ---
 
-        /** Show another code, eg after it expired or the user declined it */
+        /** Show another code, eg after it expired */
         fun newCode() {
-            if (_state.value.step is FetcherrSetupStep.Pairing) show(_state.value.stack)
+            val top = _state.value.step as? FetcherrSetupStep.Pairing ?: return
+            stopPairing()
+            replaceTop(top.copy(phase = PairingPhase.Requesting))
+            startPairing(top.url, fresh = true)
         }
 
         fun useAddress() {
@@ -207,43 +204,51 @@ class FetcherrSettingsViewModel
             push(FetcherrSetupStep.ApiKey(url))
         }
 
-        private fun startPairing(url: String) {
+        /**
+         * Show a code and wait for the user to approve it, replacing codes as they expire
+         *
+         * @param fresh false to show the code from earlier again if it's still valid, eg after Back.
+         * Fetcherr can't withdraw codes and limits how many wait at once, and the user may already
+         * be typing it on their phone.
+         */
+        private fun startPairing(
+            url: String,
+            fresh: Boolean,
+        ) {
             pairingJob =
                 viewModelScope.launchIO {
                     var codes = 0
+                    var reuse = !fresh
                     while (true) {
                         updateTop<FetcherrSetupStep.Pairing> { it.copy(phase = PairingPhase.Requesting) }
                         val code =
                             try {
-                                pairing.start(url, PairingRequest( deviceInfo.name, APP_NAME))
+                                activeCode(url, reuse) ?: requestCode(url)
                             } catch (ex: CancellationException) {
                                 throw ex
                             } catch (ex: Exception) {
                                 Timber.w(ex, "Could not start pairing with Fetcherr at %s", url)
-                                if ((ex as? FetcherrException)?.statusCode == 404) {
-                                    // Pairing was turned off, or the server is older than its info said
+                                val status = (ex as? FetcherrException)?.statusCode
+                                if (status == 404 || status == 405) {
+                                    // A version without pairing
                                     replaceTop(FetcherrSetupStep.ApiKey(url, pairingUnavailable = true))
                                 } else {
                                     updateTop<FetcherrSetupStep.Pairing> { it.copy(phase = PairingPhase.Failed(ex)) }
                                 }
                                 return@launchIO
                             }
+                        reuse = false
                         codes++
-                        updateTop<FetcherrSetupStep.Pairing> {
-                            it.copy(phase = PairingPhase.Waiting(code.code, code.approveUrl ?: "$url/pair?code=${code.code}"))
-                        }
+                        updateTop<FetcherrSetupStep.Pairing> { it.copy(phase = PairingPhase.Waiting(code.code.code, approveUrl(url))) }
                         when (val result = waitForApproval(url, code)) {
                             is PairingStatus.Approved -> {
+                                currentCode = null
                                 finishPairing(url, result.apiKey)
                                 return@launchIO
                             }
 
-                            PairingStatus.Denied -> {
-                                updateTop<FetcherrSetupStep.Pairing> { it.copy(phase = PairingPhase.Denied) }
-                                return@launchIO
-                            }
-
                             else -> {
+                                currentCode = null
                                 // Expired: replace the code quietly, unless the user seems to have walked away
                                 if (codes >= maxCodes) {
                                     updateTop<FetcherrSetupStep.Pairing> { it.copy(phase = PairingPhase.Expired) }
@@ -255,48 +260,48 @@ class FetcherrSettingsViewModel
                 }
         }
 
+        /** The code shown earlier for [url], if [reuse] and it's still valid for a while */
+        private fun activeCode(
+            url: String,
+            reuse: Boolean,
+        ): ActiveCode? =
+            currentCode?.takeIf {
+                reuse && it.url == url && it.expiresAt - System.currentTimeMillis() > REUSE_MARGIN_MS
+            }
+
+        private suspend fun requestCode(url: String): ActiveCode {
+            val code = pairing.start(url, PairingRequest(deviceInfo.name))
+            return ActiveCode(url, code, System.currentTimeMillis() + code.expiresInSeconds * 1_000L)
+                .also { currentCode = it }
+        }
+
         /**
-         * Poll until the code is approved, declined or expires. If the user leaves the screen first,
-         * the code is withdrawn so that it can't be approved by mistake later.
+         * Fetcherr's pairing form, under Settings → Devices. It doesn't fill in the code from the URL,
+         * so the user types it there.
          */
+        private fun approveUrl(url: String) = "$url/settings#devices-card"
+
+        /** Poll until the code is approved or expires */
         private suspend fun waitForApproval(
             url: String,
-            code: PairingCode,
+            code: ActiveCode,
         ): PairingStatus {
-            val interval = (code.intervalSeconds * 1_000L).coerceIn(minPollIntervalMillis, MAX_POLL_MS)
-            val expiresAt = System.currentTimeMillis() + code.expiresInSeconds * 1_000L
-            var done = false
-            try {
-                while (System.currentTimeMillis() < expiresAt) {
-                    delay(interval)
-                    val status =
-                        try {
-                            pairing.poll(url, code.secret)
-                        } catch (ex: CancellationException) {
-                            throw ex
-                        } catch (ex: Exception) {
-                            // Eg Wi-Fi dropping for a moment; the code is still valid until it expires
-                            Timber.w(ex, "Error polling Fetcherr pairing")
-                            continue
-                        }
-                    if (status != PairingStatus.Pending) {
-                        done = true
-                        return status
+            val interval = (code.code.pollIntervalSeconds * 1_000L).coerceIn(minPollIntervalMillis, MAX_POLL_MS)
+            while (System.currentTimeMillis() < code.expiresAt) {
+                delay(interval)
+                val status =
+                    try {
+                        pairing.poll(url, code.code.secret)
+                    } catch (ex: CancellationException) {
+                        throw ex
+                    } catch (ex: Exception) {
+                        // Eg Wi-Fi dropping for a moment; the code is still valid until it expires
+                        Timber.w(ex, "Error polling Fetcherr pairing")
+                        continue
                     }
-                }
-                done = true
-                return PairingStatus.Expired
-            } finally {
-                if (!done) {
-                    appScope.launch {
-                        try {
-                            pairing.cancel(url, code.secret)
-                        } catch (ex: Exception) {
-                            Timber.w(ex, "Error withdrawing Fetcherr pairing code")
-                        }
-                    }
-                }
+                if (status != PairingStatus.Pending) return status
             }
+            return PairingStatus.Expired
         }
 
         private suspend fun finishPairing(
@@ -351,7 +356,9 @@ class FetcherrSettingsViewModel
             const val MAX_CODES = 6
             private const val MIN_POLL_MS = 1_000L
             private const val MAX_POLL_MS = 10_000L
-            private const val APP_NAME = "Wholphin"
+
+            /** Get a new code rather than show one about to expire */
+            private const val REUSE_MARGIN_MS = 60_000L
 
             /** Where Fetcherr would be if it runs on the same machine as Jellyfin, eg `http://192.168.1.10:8734` */
             fun candidateUrl(jellyfinUrl: String?): String? {
@@ -399,7 +406,6 @@ sealed interface FetcherrSetupStep {
 
     data class Pairing(
         val url: String,
-        val serverName: String?,
         val phase: PairingPhase = PairingPhase.Requesting,
     ) : FetcherrSetupStep
 
@@ -428,7 +434,7 @@ sealed interface PairingPhase {
     data object Requesting : PairingPhase
 
     /**
-     * @param approveUrl opens Fetcherr's approval page with the code filled in, for the QR code
+     * @param approveUrl opens Fetcherr's pairing form, for the QR code
      */
     data class Waiting(
         val code: String,
@@ -438,9 +444,14 @@ sealed interface PairingPhase {
     /** Several codes expired without the user approving one */
     data object Expired : PairingPhase
 
-    data object Denied : PairingPhase
-
     data class Failed(
         val exception: Exception,
     ) : PairingPhase
 }
+
+/** A code being shown, and when it expires */
+private class ActiveCode(
+    val url: String,
+    val code: PairingCode,
+    val expiresAt: Long,
+)

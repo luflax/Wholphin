@@ -87,7 +87,7 @@ class FakeFetcherrServer : Interceptor {
 
     val client: OkHttpClient = OkHttpClient.Builder().addInterceptor(this).build()
 
-    /** False for a version from before pairing, without `/api/system/info` or `/api/auth/pair` */
+    /** False for a version from before pairing, without `/api/auth/pair` */
     @Volatile var pairingApi = true
 
     /** Hosts where something other than Fetcherr answers */
@@ -144,41 +144,51 @@ class FakeFetcherrServer : Interceptor {
         }
     }
 
-    /** The endpoints that answer without an API key */
+    /**
+     * The pairing endpoints, which answer without an API key, as in Fetcherr 0.5.0: there is no
+     * way to withdraw a code, `202` means waiting, and the key is handed out once
+     */
     private fun pairingResponse(request: Request): Response? {
         val path = request.url.encodedPath
-        val public = path == "/api/system/info" || path.startsWith("/api/auth/pair")
-        if (!public) return null
-        if (!pairingApi) return respond(request, 404, """{"error":{"code":"not_found","message":"Not found"}}""")
+        if (!path.startsWith("/api/auth/pair")) return null
+        val notFound = """{"error":{"code":"not_found","message":"Not found"}}"""
+        if (!pairingApi) return respond(request, 404, notFound)
         return when {
-            path == "/api/system/info" -> {
-                respond(request, 200, """{"product":"Fetcherr","version":"0.5.0","name":"Home","pairing":true}""")
-            }
-
             path == "/api/auth/pair" && request.method == "POST" -> {
+                if (pairings.values.count { it.status == "pending" } >= MAX_PENDING) {
+                    return respond(request, 429, """{"error":{"code":"too_many","message":"Too many pairings in progress"}}""")
+                }
                 val number = pairingCount.incrementAndGet()
-                val body =
-                    Buffer().also { request.body!!.writeTo(it) }.readUtf8()
+                val body = Buffer().also { request.body!!.writeTo(it) }.readUtf8()
                 val pairing = FakePairing(number, "K7Q%03d".format(number), "secret$number", body)
                 pairings[pairing.secret] = pairing
                 respond(
                     request,
                     201,
-                    """{"code":"${pairing.code}","secret":"${pairing.secret}","expires_in":300,"interval":0}""",
+                    """{"code":"${pairing.code}","secret":"${pairing.secret}","expires":"2026-11-12T20:00:00Z",""" +
+                        """"expires_in_secs":300,"poll_interval_secs":0}""",
                 )
             }
 
-            request.method == "DELETE" -> {
-                pairings.remove(path.substringAfterLast('/'))
-                respond(request, 204, "")
+            request.method != "GET" -> {
+                respond(request, 405, "")
             }
 
             else -> {
                 val pairing = pairings[path.substringAfterLast('/')]
                 when (pairing?.status) {
-                    null, "expired" -> respond(request, 410, """{"error":{"code":"expired","message":"Expired"}}""")
-                    "approved" -> respond(request, 200, """{"status":"approved","api_key":"$apiKey"}""")
-                    else -> respond(request, 200, """{"status":"${pairing.status}"}""")
+                    "pending" -> {
+                        respond(request, 202, """{"status":"pending","expires":"2026-11-12T20:00:00Z"}""")
+                    }
+
+                    "approved" -> {
+                        pairing.status = "collected"
+                        respond(request, 200, """{"api_key":"$apiKey","device_id":${pairing.number}}""")
+                    }
+
+                    else -> {
+                        respond(request, 404, notFound)
+                    }
                 }
             }
         }
@@ -204,6 +214,9 @@ class FakeFetcherrServer : Interceptor {
 
     companion object {
         const val PAGE_SIZE = 20
+
+        /** Pairings waiting at once before Fetcherr answers 429 */
+        const val MAX_PENDING = 3
         val STATUS = SystemStatus(ConfiguredServices(true, true, true, true, true), "0.4.0")
     }
 }
@@ -219,7 +232,7 @@ class FakePairing(
     val secret: String,
     val request: String,
 ) {
-    /** pending, approved, denied or expired, as set by the user in the web UI */
+    /** pending, approved (in the web UI), collected (by the TV) or expired */
     @Volatile var status = "pending"
 }
 

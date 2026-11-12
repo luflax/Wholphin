@@ -349,7 +349,7 @@ private fun ColumnScope.PairingContent(
     onChangeAddress: () -> Unit,
     onUseApiKey: () -> Unit,
 ) {
-    Title(stringResource(R.string.fetcherr_pair_title), listOfNotNull(step.serverName, step.url).joinToString(" · "))
+    Title(stringResource(R.string.fetcherr_pair_title), step.url)
     val phase = step.phase
     val waiting = phase as? PairingPhase.Waiting
     Row(
@@ -367,7 +367,7 @@ private fun ColumnScope.PairingContent(
                 color = MaterialTheme.colorScheme.onSurface,
             )
             Text(
-                text = "${step.url}/pair",
+                text = "${step.url}/settings",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurface,
@@ -415,7 +415,6 @@ private fun ColumnScope.PairingContent(
         is PairingPhase.Waiting -> Progress(stringResource(R.string.fetcherr_pair_waiting))
         PairingPhase.Requesting -> Spacer(Modifier.height(32.dp))
         PairingPhase.Expired -> ErrorText(stringResource(R.string.fetcherr_pair_expired))
-        PairingPhase.Denied -> ErrorText(stringResource(R.string.fetcherr_pair_denied))
         is PairingPhase.Failed -> ErrorText(fetcherrErrorMessage(phase.exception))
     }
     // Focus starts on a harmless button, so that an accidental OK doesn't leave the screen

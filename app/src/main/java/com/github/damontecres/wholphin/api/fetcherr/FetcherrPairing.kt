@@ -18,45 +18,31 @@ import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resumeWithException
 
 /**
- * `GET /api/system/info`, which answers without an API key so that a client can recognize Fetcherr
+ * Body of `POST /api/auth/pair`
+ *
+ * @param name suggested for the device in Fetcherr's Devices list; the user can change it when approving
  */
 @Serializable
-data class FetcherrInfo(
-    val product: String,
-    val version: String,
-    /** Shown to the user, eg "Fetcherr" or a name given in its settings */
-    val name: String? = null,
-    /** Whether new devices can pair with a code */
-    val pairing: Boolean = false,
-) {
-    val isFetcherr: Boolean get() = product.equals("Fetcherr", ignoreCase = true)
-}
-
-@Serializable
 data class PairingRequest(
-    @SerialName("name") val deviceName: String,
-    val app: String,
+    val name: String,
 )
 
 /**
- * A code to show to the user, who approves it in Fetcherr's web UI
+ * A code to show to the user, who enters it under Settings → Devices in Fetcherr's web UI
  */
 @Serializable
 data class PairingCode(
     val code: String,
     /** Identifies this pairing when polling. Never shown. */
     val secret: String,
-    @SerialName("expires_in") val expiresInSeconds: Int,
-    /** How often to poll, in seconds */
-    @SerialName("interval") val intervalSeconds: Int = 2,
-    /** The page approving this code, if Fetcherr knows its public address */
-    @SerialName("approve_url") val approveUrl: String? = null,
+    @SerialName("expires_in_secs") val expiresInSeconds: Long,
+    /** How often to poll */
+    @SerialName("poll_interval_secs") val pollIntervalSeconds: Long,
 )
 
 @Serializable
-data class PairingStatusBody(
-    val status: String,
-    @SerialName("api_key") val apiKey: String? = null,
+private data class PairedDevice(
+    @SerialName("api_key") val apiKey: String,
 )
 
 sealed interface PairingStatus {
@@ -66,9 +52,7 @@ sealed interface PairingStatus {
         val apiKey: String,
     ) : PairingStatus
 
-    data object Denied : PairingStatus
-
-    /** The code expired or was already used */
+    /** The code expired, or its key was already collected */
     data object Expired : PairingStatus
 }
 
@@ -78,15 +62,9 @@ sealed interface PairingStatus {
 sealed interface FetcherrProbe {
     val url: String
 
-    /**
-     * A Fetcherr server. [info] is null for a version without `/api/system/info`, which can't pair.
-     */
     data class Found(
         override val url: String,
-        val info: FetcherrInfo?,
-    ) : FetcherrProbe {
-        val canPair: Boolean get() = info?.pairing == true
-    }
+    ) : FetcherrProbe
 
     /** Something answered, but not Fetcherr */
     data class NotFetcherr(
@@ -117,32 +95,19 @@ class FetcherrPairingClient(
             .callTimeout(probeTimeoutMillis, TimeUnit.MILLISECONDS)
             .build()
 
-    /** Check whether Fetcherr answers at [baseUrl] */
+    /**
+     * Check whether Fetcherr answers at [baseUrl]
+     *
+     * Without a key, Fetcherr answers its status endpoint with a 401 and its own error body, which
+     * tells it apart from other servers.
+     */
     suspend fun probe(baseUrl: String): FetcherrProbe =
         try {
-            probeClient.get("$baseUrl/api/system/info").use { response ->
-                when {
-                    response.isSuccessful -> {
-                        val info =
-                            try {
-                                json.decodeFromString<FetcherrInfo>(response.body.string())
-                            } catch (_: Exception) {
-                                null
-                            }
-                        if (info?.isFetcherr == true) {
-                            FetcherrProbe.Found(baseUrl, info)
-                        } else {
-                            FetcherrProbe.NotFetcherr(baseUrl)
-                        }
-                    }
-
-                    response.code == 404 -> {
-                        probeOlderVersion(baseUrl)
-                    }
-
-                    else -> {
-                        FetcherrProbe.NotFetcherr(baseUrl)
-                    }
+            probeClient.get("$baseUrl/api/system/status").use { response ->
+                if (response.code == 401 && response.errorBody()?.error?.code != null) {
+                    FetcherrProbe.Found(baseUrl)
+                } else {
+                    FetcherrProbe.NotFetcherr(baseUrl)
                 }
             }
         } catch (ex: CancellationException) {
@@ -155,23 +120,10 @@ class FetcherrPairingClient(
         }
 
     /**
-     * Versions before pairing have no info endpoint, but answer the status endpoint without a key
-     * with Fetcherr's error body
-     */
-    private suspend fun probeOlderVersion(baseUrl: String): FetcherrProbe =
-        probeClient.get("$baseUrl/api/system/status").use { response ->
-            if (response.code == 401 && response.errorBody()?.error?.code != null) {
-                FetcherrProbe.Found(baseUrl, null)
-            } else {
-                FetcherrProbe.NotFetcherr(baseUrl)
-            }
-        }
-
-    /**
      * Ask for a code to show to the user
      *
-     * @throws FetcherrException if Fetcherr refuses, eg 404 when it can't pair or 429 when too many
-     * codes were asked for
+     * @throws FetcherrException if Fetcherr refuses, eg 404 or 405 for a version that can't pair, or
+     * 429 when too many pairings are in progress
      */
     suspend fun start(
         baseUrl: String,
@@ -185,43 +137,19 @@ class FetcherrPairingClient(
         }
     }
 
-    /** Whether the user approved the code yet */
+    /** Whether the user approved the code yet: 202 while waiting, then 200 with the key, once */
     suspend fun poll(
         baseUrl: String,
         secret: String,
     ): PairingStatus =
         client.get("$baseUrl/api/auth/pair/$secret").use { response ->
-            when {
-                response.code == 404 || response.code == 410 -> {
-                    PairingStatus.Expired
-                }
-
-                !response.isSuccessful -> {
-                    throw response.toException()
-                }
-
-                else -> {
-                    val status = json.decodeFromString<PairingStatusBody>(response.body.string())
-                    when (status.status) {
-                        "approved" -> status.apiKey?.let { PairingStatus.Approved(it) } ?: PairingStatus.Expired
-                        "denied" -> PairingStatus.Denied
-                        "expired" -> PairingStatus.Expired
-                        else -> PairingStatus.Pending
-                    }
-                }
+            when (response.code) {
+                200 -> PairingStatus.Approved(json.decodeFromString<PairedDevice>(response.body.string()).apiKey)
+                202 -> PairingStatus.Pending
+                404, 410 -> PairingStatus.Expired
+                else -> throw response.toException()
             }
         }
-
-    /** Withdraw a code the user no longer needs, so that it can't be approved by mistake */
-    suspend fun cancel(
-        baseUrl: String,
-        secret: String,
-    ) {
-        client
-            .newCall(Request.Builder().url("$baseUrl/api/auth/pair/$secret").delete().build())
-            .await()
-            .close()
-    }
 
     private suspend fun OkHttpClient.get(url: String): Response = newCall(Request.Builder().url(url).get().build()).await()
 

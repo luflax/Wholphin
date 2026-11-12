@@ -1,5 +1,6 @@
 package com.github.damontecres.wholphin.test
 
+import com.github.damontecres.wholphin.api.fetcherr.FetcherrException
 import com.github.damontecres.wholphin.data.CurrentUser
 import com.github.damontecres.wholphin.data.ServerRepository
 import com.github.damontecres.wholphin.services.FetcherrConnection
@@ -16,7 +17,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -76,7 +76,6 @@ class TestFetcherrSetup {
                 preferences,
                 DeviceInfo(id = "device1", name = "Living room TV"),
                 server.client,
-                scope,
             ).apply { minPollIntervalMillis = 10 }
         return Setup(vm, preferences, repository)
     }
@@ -95,7 +94,7 @@ class TestFetcherrSetup {
             code != null && code != previous
         }
 
-    private suspend fun awaitCall(call: String) = withTimeout(10_000) { while (call !in server.calls) delay(20) }
+    private fun pairingStarts() = server.calls.count { it == "POST /api/auth/pair" }
 
     @Test
     fun `finds Fetcherr next to Jellyfin and pairs with a code`() =
@@ -105,13 +104,13 @@ class TestFetcherrSetup {
             val waiting = vm.awaitCode()
             val step = vm.state.value.step as FetcherrSetupStep.Pairing
             Assert.assertEquals(candidate, step.url)
-            Assert.assertEquals("Home", step.serverName)
-            Assert.assertEquals("$candidate/pair?code=${waiting.code}", waiting.approveUrl)
+            // Fetcherr's pairing form, where the user types the code
+            Assert.assertEquals("$candidate/settings#devices-card", waiting.approveUrl)
             val pairing = server.latestPairing!!
-            Assert.assertTrue(pairing.request, pairing.request.contains("\"device_name\":\"Living room TV\""))
-            Assert.assertTrue(pairing.request, pairing.request.contains("\"device_id\":\"device1\""))
+            Assert.assertEquals(pairing.code, waiting.code)
+            Assert.assertEquals("""{"name":"Living room TV"}""", pairing.request)
 
-            // The user approves the code in Fetcherr's web UI
+            // The user enters the code in Fetcherr's web UI
             pairing.status = "approved"
             val done = vm.awaitStep { it is FetcherrSetupStep.Done } as FetcherrSetupStep.Done
             Assert.assertEquals("0.4.0", done.status.version)
@@ -137,10 +136,9 @@ class TestFetcherrSetup {
             Assert.assertEquals("http://192.168.1.10:8734", pairing.url)
             vm.awaitCode()
 
-            // Back returns to the address, and withdraws the code
+            // Back returns to the address
             Assert.assertTrue(vm.back())
             Assert.assertTrue(vm.state.value.step is FetcherrSetupStep.Address)
-            awaitCall("DELETE /api/auth/pair/${server.latestPairing!!.secret}")
             Assert.assertFalse(vm.back())
         }
 
@@ -219,32 +217,51 @@ class TestFetcherrSetup {
         }
 
     @Test
-    fun `a declined code can be tried again`() =
+    fun `coming back to pairing shows the same code`() =
         runBlocking<Unit> {
             val vm = setup().vm
             vm.init()
-            vm.awaitCode()
-            server.latestPairing!!.status = "denied"
-            vm.awaitStep { (it as? FetcherrSetupStep.Pairing)?.phase == PairingPhase.Denied }
-            vm.newCode()
-            vm.awaitCode()
+            val first = vm.awaitCode()
+            // Fetcherr can't withdraw codes and limits how many wait at once, so going back and forth
+            // mustn't ask for more
+            repeat(FakeFetcherrServer.MAX_PENDING + 1) {
+                vm.useApiKey()
+                val step = vm.awaitStep { it is FetcherrSetupStep.ApiKey } as FetcherrSetupStep.ApiKey
+                Assert.assertFalse(step.pairingUnavailable)
+                vm.back()
+                Assert.assertEquals(first.code, vm.awaitCode().code)
+            }
+            Assert.assertEquals(1, pairingStarts())
+
+            // The code is still approved & collected
+            server.latestPairing!!.status = "approved"
+            vm.awaitStep { it is FetcherrSetupStep.Done }
         }
 
     @Test
-    fun `choosing the API key withdraws the code`() =
+    fun `a new code can be asked for`() =
+        runBlocking<Unit> {
+            val vm = setup().vm
+            vm.init()
+            val first = vm.awaitCode()
+            vm.newCode()
+            vm.awaitNewCode(first.code)
+            Assert.assertEquals(2, pairingStarts())
+        }
+
+    @Test
+    fun `too many pairings in progress says so`() =
         runBlocking<Unit> {
             val vm = setup().vm
             vm.init()
             vm.awaitCode()
-            val secret = server.latestPairing!!.secret
-            vm.useApiKey()
-            val step = vm.awaitStep { it is FetcherrSetupStep.ApiKey } as FetcherrSetupStep.ApiKey
-            Assert.assertFalse(step.pairingUnavailable)
-            awaitCall("DELETE /api/auth/pair/$secret")
-            // Back to pairing shows a fresh code
-            vm.back()
-            vm.awaitCode()
-            Assert.assertNotEquals(secret, server.latestPairing!!.secret)
+            // Eg other TVs pairing at the same time
+            repeat(FakeFetcherrServer.MAX_PENDING - 1) {
+                server.pairings["other$it"] = FakePairing(100 + it, "OTHER$it", "other$it", "{}")
+            }
+            vm.newCode()
+            val failed = vm.awaitStep { (it as? FetcherrSetupStep.Pairing)?.phase is PairingPhase.Failed } as FetcherrSetupStep.Pairing
+            Assert.assertEquals(429, ((failed.phase as PairingPhase.Failed).exception as FetcherrException).statusCode)
         }
 
     @Test

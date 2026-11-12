@@ -1028,12 +1028,11 @@
     <string name="fetcherr_searching_at">Checking %1$s</string>
     <string name="fetcherr_pair_title">Pair with Fetcherr</string>
     <string name="fetcherr_pair_open">On your phone or computer, open</string>
-    <string name="fetcherr_pair_enter_code">and enter this code</string>
-    <string name="fetcherr_pair_scan">Or scan to approve</string>
+    <string name="fetcherr_pair_enter_code">and enter this code under Devices</string>
+    <string name="fetcherr_pair_scan">Or scan to open it</string>
     <string name="fetcherr_pair_requesting">Getting a code…</string>
     <string name="fetcherr_pair_waiting">Waiting for approval…</string>
     <string name="fetcherr_pair_expired">The code expired</string>
-    <string name="fetcherr_pair_denied">Pairing was declined in Fetcherr</string>
     <string name="fetcherr_pair_new_code">New code</string>
     <string name="fetcherr_pair_again">Pair again</string>
     <string name="fetcherr_change_address">Change address</string>
