@@ -79,7 +79,8 @@ configure<ApplicationExtension> {
         versionCode = gitTags.trim().lines().size
         versionName = gitDescribe.trim().removePrefix("v").ifBlank { "0.0.0" }
         testInstrumentationRunner = "com.github.damontecres.wholphin.test.WholphinTestRunner"
-		ndk { abiFilters += "arm64-v8a" }
+        // Personal build: only ship 32-bit ARM native libraries
+        ndk { abiFilters += "armeabi-v7a" }
 
         buildConfigField("long", "BUILD_TIME", System.currentTimeMillis().toString())
     }
@@ -178,8 +179,8 @@ configure<ApplicationExtension> {
 
     splits {
         abi {
-            // Disable split abis when building bundles
-            isEnable = !isBuildingBundle.get()
+            // Personal build: a single armeabi-v7a APK (see abiFilters), so no per-ABI splits
+            isEnable = false
 
             reset()
             include("armeabi-v7a", "arm64-v8a", "x86_64")

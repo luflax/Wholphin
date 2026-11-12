@@ -29,8 +29,21 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0 # Need the tags to build
-      - name: Setup
-        uses: ./.github/actions/setup
+
+      # The runner already has the Android SDK. No NDK (nothing native is compiled) or
+      # Python (only used by pre-commit) needed.
+      - name: Setup JDK
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6
+        with:
+          distribution: zulu
+          java-version: '21'
+
+      # Persists dependencies and the Gradle build cache between runs, so unchanged
+      # code isn't recompiled. Writes are allowed even though this isn't the default branch.
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: false
 
       - name: Get version name
         run: |
@@ -48,25 +61,22 @@ jobs:
           path: ~/.android/debug.keystore
           key: wholphin-debug-keystore
 
+      # No `clean` (the runner starts empty) and no release lint check
       - name: Build release APK
         run: |
           echo "release.signing.config=debug" > local.properties
-          ./gradlew clean assembleDefaultRelease
+          ./gradlew assembleDefaultRelease -x lintVitalDefaultRelease
 
-      # The in-app updater looks for assets named Wholphin-release[-<abi>].apk
-      - name: Rename APKs
+      # The in-app updater looks for an asset named Wholphin-release.apk
+      - name: Rename APK
         run: |
           mkdir -p dist
-          find app/build/outputs/apk -name '*.apk' -print0 |
-            while IFS= read -r -d '' apk; do
-              abi="$(basename "$apk" | grep -oE '(armeabi-v7a|arm64-v8a|x86_64)\.apk$' | sed 's/\.apk$//' || true)"
-              short_name="Wholphin-release${abi:+-$abi}.apk"
-              echo "$apk => dist/$short_name"
-              cp "$apk" "dist/$short_name"
-            done
-
-      - name: Checksums
-        run: |
+          apks=(app/build/outputs/apk/default/release/*.apk)
+          if [[ ${#apks[@]} -ne 1 ]]; then
+            echo "::error::Expected exactly one APK, found: ${apks[*]}"
+            exit 1
+          fi
+          cp "${apks[0]}" dist/Wholphin-release.apk
           sha256sum dist/*.apk
 
       - name: Upload mapping files
@@ -86,5 +96,5 @@ jobs:
             --latest=false --prerelease \
             --title "$VERSION_NAME" \
             --target "$GITHUB_SHA" \
-            --notes "Build of \`$BRANCH_NAME\` at $GITHUB_SHA. Signed with a CI debug key, not the official release key." \
+            --notes "Build of \`$BRANCH_NAME\` at $GITHUB_SHA (armeabi-v7a). Signed with a CI debug key, not the official release key." \
             dist/*.apk
